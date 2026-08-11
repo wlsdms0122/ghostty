@@ -15,6 +15,18 @@ extension TerminalRestorableState {
         let effectiveFullscreenMode: FullscreenMode?
         let tabColor: TerminalTabColor?
         let titleOverride: String?
+
+        // MARK: - Version 8 (fork: custom tab groups)
+        let customTabScopeID: UUID?
+        let customTabGroupID: UUID?
+
+        /// Every group of the window's scope, in bar order.
+        ///
+        /// Carried by each tab rather than stored once for the window: restoration hands
+        /// tabs back one at a time with no say in the order, so there's no "first" tab to
+        /// put it on. Each one restores the same list into the same scope, and the ones
+        /// after the first are no-ops.
+        let customTabGroups: [CustomTabGroup]?
     }
 }
 
@@ -26,6 +38,10 @@ extension TerminalRestorableState.InternalState where ViewType == Ghostty.Surfac
             effectiveFullscreenMode: controller.fullscreenStyle?.fullscreenMode,
             tabColor: (controller.window as? TerminalWindow)?.tabColor,
             titleOverride: controller.titleOverride,
+            customTabScopeID: (controller.window as? CustomTabsTerminalWindow)?.tabScopeID,
+            customTabGroupID: (controller.window as? CustomTabsTerminalWindow)?.customTabGroupID,
+            customTabGroups: (controller.window as? CustomTabsTerminalWindow)?
+                .groupRegistry.orderedGroups,
         )
     }
 }

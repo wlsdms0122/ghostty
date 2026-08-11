@@ -276,20 +276,30 @@ pub fn init(b: *std.Build, appVersion: []const u8, libVersion: []const u8) !Conf
         if (vsn.tag) |tag| {
             // Tip releases behave just like any other pre-release so we skip.
             if (!std.mem.eql(u8, tag, "tip")) {
-                const expected = b.fmt("v{d}.{d}.{d}", .{
+                // The tag must match the full version in build.zig.zon,
+                // including the pre-release identifier if there is one. This
+                // fork releases as vX.Y.Z-<pre> so that its tags never collide
+                // with the upstream vX.Y.Z tags.
+                const expected = if (app_version.pre) |pre| b.fmt("v{d}.{d}.{d}-{s}", .{
+                    app_version.major,
+                    app_version.minor,
+                    app_version.patch,
+                    pre,
+                }) else b.fmt("v{d}.{d}.{d}", .{
                     app_version.major,
                     app_version.minor,
                     app_version.patch,
                 });
 
                 if (!std.mem.eql(u8, tag, expected)) {
-                    @panic("tagged releases must be in vX.Y.Z format matching build.zig");
+                    @panic("tagged releases must be in vX.Y.Z[-PRE] format matching build.zig.zon");
                 }
 
                 break :version .{
                     .major = app_version.major,
                     .minor = app_version.minor,
                     .patch = app_version.patch,
+                    .pre = app_version.pre,
                 };
             }
         }

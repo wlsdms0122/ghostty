@@ -3336,6 +3336,12 @@ keybind: Keybinds = .{},
 /// macOS 14 does not have this issue and any other macOS version has not
 /// been tested.
 ///
+/// The "custom" style hides the native tab bar and draws its own tab bar
+/// below the titlebar. The native tab group remains the source of truth, so
+/// all tab behaviors (new tab, restoration, AppleScript) are unchanged; only
+/// the presentation differs. This style adds tab grouping and full tab color
+/// highlighting.
+///
 /// The "hidden" style hides the titlebar. Unlike `window-decoration = none`,
 /// however, it does not remove the frame from the window or cause it to have
 /// squared corners. Changing to or from this option at run-time may affect
@@ -9081,6 +9087,7 @@ pub const MacTitlebarStyle = enum {
     transparent,
     tabs,
     hidden,
+    custom,
 };
 
 /// See macos-titlebar-proxy-icon
