@@ -1524,15 +1524,21 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         guard let windowController = window.windowController else { return }
         guard let tabGroup = windowController.window?.tabGroup else { return }
-        let tabbedWindows = tabGroup.windows
+        let tabbedWindows = window.tabScope
 
         // This will be the index we want to actual go to
         let finalIndex: Int
 
         // An index that is invalid is used to signal some special values.
         if tabIndex <= 0 {
-            guard let selectedWindow = tabGroup.selectedWindow else { return }
-            guard let selectedIndex = tabbedWindows.firstIndex(where: { $0 == selectedWindow }) else { return }
+            // Count from the tab that sent the action, not from the tab group's idea of
+            // what's selected. AppKit updates that asynchronously, so holding the key
+            // down outruns it and each repeat steps from a stale position — which lands
+            // outside the group the user is in. The sending tab is current by
+            // definition, and is always one of the visible ones.
+            guard let selectedIndex = tabbedWindows.firstIndex(of: window)
+                ?? tabGroup.selectedWindow.flatMap({ tabbedWindows.firstIndex(of: $0) })
+            else { return }
 
             if tabIndex == GHOSTTY_GOTO_TAB_PREVIOUS.rawValue {
                 if selectedIndex == 0 {
