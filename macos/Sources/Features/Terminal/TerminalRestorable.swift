@@ -58,7 +58,7 @@ extension TerminalRestorable {
 
 /// The state stored for terminal window restoration.
 final class TerminalRestorableState: TerminalRestorable {
-    static var version: Int { 7 }
+    static var version: Int { 8 }
     static var minimumVersion: Int { 5 }
 
     var focusedSurface: String? {
@@ -75,6 +75,15 @@ final class TerminalRestorableState: TerminalRestorable {
     }
     var titleOverride: String? {
         internalState.titleOverride
+    }
+    var customTabScopeID: UUID? {
+        internalState.customTabScopeID
+    }
+    var customTabGroupID: UUID? {
+        internalState.customTabGroupID
+    }
+    var customTabGroups: [CustomTabGroup]? {
+        internalState.customTabGroups
     }
 
     /// Internal State we use to perform unit tests
@@ -166,6 +175,18 @@ class TerminalWindowRestoration: NSObject, NSWindowRestoration {
         // Restore our tab color and avoid unnecessary `invalidateRestorableState` calls
         if let tabColor = state.tabColor {
             (window as? TerminalWindow)?.tabColor = tabColor
+        }
+
+        // Restore the custom tab bar's groups. The scope has to be adopted before the
+        // definitions, since the definitions are stored per scope.
+        if let window = window as? CustomTabsTerminalWindow {
+            if let scopeID = state.customTabScopeID {
+                window.adoptRestoredScope(scopeID)
+            }
+            for group in state.customTabGroups ?? [] {
+                window.groupRegistry.adopt(group)
+            }
+            window.customTabGroupID = state.customTabGroupID
         }
 
         // Restore the tab title override
