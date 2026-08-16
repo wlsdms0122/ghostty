@@ -119,6 +119,27 @@ class CustomTabBarModel: ObservableObject {
     /// drawn from, and republishing it on every scrolled pixel would redraw fourteen bars.
     var rowOffset: CGFloat = 0
 
+    /// The one thing the bar should be showing.
+    ///
+    /// A fact about the scope, not about any window's view of it, which is why it lives
+    /// here: the bar of a tab that isn't selected is inside a window that is ordered out,
+    /// and SwiftUI stops updating the views in one of those. A copy of this held in view
+    /// state would be as stale as the view, and stale is exactly what it must not be at
+    /// the moment a window comes forward and asks where to stand.
+    ///
+    /// Read off the active section rather than off the selected tab. The two usually agree
+    /// — the active group is derived from the focused tab — but a group held open with
+    /// nothing in it is the exception, and there the selected tab is in some *other*
+    /// group. Scrolling to it would take the row away from the group the user just went
+    /// to, so the empty group's header stands in.
+    var scrollTarget: TabBarScrollTarget? {
+        guard let active = sections.first(where: \.isActive) else { return nil }
+        guard let tab = active.tabs.first(where: \.isSelected) ?? active.tabs.first else {
+            return .section(active.id)
+        }
+        return .tab(tab.id)
+    }
+
     private weak var observedTabGroup: NSWindowTabGroup?
     private var windowsObservation: NSKeyValueObservation?
     private var tokens: [NSObjectProtocol] = []
