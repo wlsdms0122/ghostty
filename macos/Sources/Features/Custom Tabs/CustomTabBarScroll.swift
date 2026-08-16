@@ -35,6 +35,16 @@ enum TabBarScrollTarget: Equatable {
     case section(UUID)
 }
 
+/// Why the row is being asked to move. A closed set — there are three things that ask.
+enum AlignReason: String {
+    /// The selection landed somewhere new.
+    case selection
+    /// This bar came forward and hasn't been checked against the selection since.
+    case key
+    /// The second look, once the row's layout has stopped rearranging itself.
+    case settle
+}
+
 // MARK: - Scroller
 
 /// Moves the row by a measured amount.
@@ -44,7 +54,20 @@ enum TabBarScrollTarget: Equatable {
 /// something done to AppKit rather than a value SwiftUI redraws from.
 final class TabBarScroller {
     weak var scrollView: NSScrollView? {
-        didSet { watchScrolls() }
+        didSet {
+            watchScrolls()
+
+            // The scroll view and the window taking focus arrive from different
+            // subsystems — this one from SwiftUI's next layout pass, the other from
+            // AppKit — so neither can be assumed to come first. Both entry points do the
+            // same thing, and whichever is last is the one that finds both halves in
+            // hand. Without this, a bar whose scroll view landed after its window became
+            // key would sit out the `guard window === scrollView?.window` in the observer
+            // below and never take the scope's offset.
+            guard scrollView?.window?.isKeyWindow == true else { return }
+            adoptSharedOffset()
+            wantsAlign = true
+        }
     }
 
     /// The scope whose row offset this one shares. See `CustomTabBarModel.rowOffset`.
@@ -67,8 +90,16 @@ final class TabBarScroller {
     private var keyObserver: NSObjectProtocol?
     private var liveScrollObservers: [NSObjectProtocol] = []
 
-    /// Where the scroll in flight is headed.
+    /// Where the scroll in flight is headed, and which flight that is.
+    ///
+    /// A completion runs at the time it was booked for, not when its animation is still
+    /// the current one — so a second scroll started before the first has landed would
+    /// otherwise be declared finished by its predecessor's completion. What follows from
+    /// that is not cosmetic: `yieldToUser` checks `isAnimating` before taking the row
+    /// back, so a row still being driven by Core Animation would go on fighting the
+    /// trackpad, which is the one thing that flag exists to prevent.
     private var destination: CGFloat?
+    private var flight = 0
 
     /// Whether the user has their hand on the row right now.
     private(set) var isUserScrolling = false
@@ -91,6 +122,9 @@ final class TabBarScroller {
         generation += 1
         isUserScrolling = true
         destination = nil
+        // Ends the flight as well as the animation, so the completion still due for it
+        // can't come back and declare the row idle after the user has taken it.
+        flight += 1
 
         TabBarScrollLog.log("[\(id)] user took the row (was\(isAnimating ? "" : " not") moving)")
         guard isAnimating, let clip = scrollView?.contentView else { return }
@@ -204,12 +238,20 @@ final class TabBarScroller {
 
         let origin = NSPoint(x: to, y: clip.bounds.origin.y)
         isAnimating = true
+        flight += 1
+        let token = flight
         NSAnimationContext.runAnimationGroup { context in
             context.duration = Self.duration
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             clip.animator().setBoundsOrigin(origin)
         } completionHandler: { [weak self, weak scrollView] in
-            self?.isAnimating = false
+            // Only the flight this call started. By now the row may be on a later one, or
+            // in the user's hands, and either way this completion has nothing to say
+            // about it.
+            if let self, token == self.flight {
+                self.isAnimating = false
+                self.destination = nil
+            }
             guard let scrollView else { return }
             scrollView.reflectScrolledClipView(scrollView.contentView)
         }
@@ -283,9 +325,12 @@ struct TabBarScrollViewBridge: NSViewRepresentable {
     let model: CustomTabBarModel
 
     func makeNSView(context: Context) -> NSView {
-        BridgeView(scroller: scroller, model: model)
+        BridgeView(scroller: scroller)
     }
 
+    // The one place the scope is wired in. SwiftUI runs this immediately after
+    // `makeNSView` and on every update after that, so a second copy in the initializer
+    // bought nothing and left two places to keep in step.
     func updateNSView(_ nsView: NSView, context: Context) {
         scroller.model = model
     }
@@ -293,10 +338,9 @@ struct TabBarScrollViewBridge: NSViewRepresentable {
     private class BridgeView: NSView {
         private let scroller: TabBarScroller
 
-        init(scroller: TabBarScroller, model: CustomTabBarModel) {
+        init(scroller: TabBarScroller) {
             self.scroller = scroller
             super.init(frame: .zero)
-            scroller.model = model
         }
 
         required init?(coder: NSCoder) {

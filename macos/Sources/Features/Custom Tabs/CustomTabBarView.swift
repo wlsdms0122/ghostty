@@ -27,7 +27,7 @@ struct CustomTabBarView: View {
     @State private var scroller = TabBarScroller()
 
     /// Why the row should move, until it has. Nil means it shouldn't.
-    @State private var pendingReason: String?
+    @State private var pendingReason: AlignReason?
 
     /// Whether a second look is already coming. Opening a tab is two reasons at once — a
     /// new selection, and its window taking focus — and each booking its own would put the
@@ -84,7 +84,7 @@ struct CustomTabBarView: View {
         .frame(height: Self.height)
         // Somewhere new to be.
         .onChange(of: scrollTarget) { _ in
-            pendingReason = "selection"
+            pendingReason = .selection
             alignToSelection()
         }
     }
@@ -145,11 +145,16 @@ struct CustomTabBarView: View {
     /// move goes out at once, on the best frame there is, and `settle` looks again once
     /// the layout has stopped moving and closes the gap if one is left.
     private func alignToSelection(settling: Bool = false) {
-        let reason = settling ? "settle" : (pendingReason ?? (scroller.wantsAlign ? "key" : "none"))
-        // Cleared here rather than where the second look succeeds: one that finds nothing
-        // to do is still the second look having happened.
-        if settling { settleScheduled = false }
-        guard settling || pendingReason != nil || scroller.wantsAlign else { return }
+        let reason: AlignReason
+        if settling {
+            reason = .settle
+        } else if let pendingReason {
+            reason = pendingReason
+        } else if scroller.wantsAlign {
+            reason = .key
+        } else {
+            return
+        }
         // Not while the user is holding the row. Their scroll is an instruction; ours is
         // a guess about what they'd want.
         guard !scroller.isUserScrolling else {
@@ -172,11 +177,11 @@ struct CustomTabBarView: View {
         // once the layout that drew the new one has run. The reason stays pending until it
         // does.
         guard let frame = targetRect else {
-            TabBarScrollLog.log("\(reason): waiting — no frame for \(target) yet")
+            TabBarScrollLog.log("\(reason.rawValue): waiting — no frame for \(target) yet")
             return
         }
         guard let viewport = scroller.visibleRect else {
-            TabBarScrollLog.log("\(reason): no scroll view yet")
+            TabBarScrollLog.log("\(reason.rawValue): no scroll view yet")
             return
         }
 
@@ -221,7 +226,7 @@ struct CustomTabBarView: View {
         TabBarScrollLog.log(String(
             format: "[%@] %@: target=%@ frame=[%.1f…%.1f] viewport=[%.1f…%.1f] delta=%.1f %@ moved=%@",
             scroller.id,
-            reason,
+            reason.rawValue,
             String(describing: target),
             frame.minX, frame.maxX,
             viewport.minX, viewport.maxX,
