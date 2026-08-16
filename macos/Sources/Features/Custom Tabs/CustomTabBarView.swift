@@ -23,6 +23,17 @@ struct CustomTabBarView: View {
     /// apart from one that merely rearranges or resizes what's already there.
     @State private var drawnTabIDs: Set<ObjectIdentifier> = []
 
+    /// The row's scroll view, reached through AppKit. See `CustomTabBarScroll.swift`.
+    @State private var scroller = TabBarScroller()
+
+    /// Why the row should move, until it has. Nil means it shouldn't.
+    @State private var pendingReason: String?
+
+    /// Whether a second look is already coming. Opening a tab is two reasons at once — a
+    /// new selection, and its window taking focus — and each booking its own would put the
+    /// row through two corrections for one thing that happened.
+    @State private var settleScheduled = false
+
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Self.sectionSpacing) {
@@ -39,10 +50,20 @@ struct CustomTabBarView: View {
 
                 Spacer(minLength: 0)
             }
+            .background(TabBarScrollViewBridge(scroller: scroller, model: model))
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .coordinateSpace(name: Self.coordinateSpace)
-            .onPreferenceChange(SectionFramePreference.self) { sectionFrames = $0 }
+            .onPreferenceChange(SectionFramePreference.self) { frames in
+                sectionFrames = frames
+                if pendingReason != nil || scroller.wantsAlign { alignToSelection() }
+            }
+            // The number a pending move needs. Not a reason to move in itself — see
+            // `alignToSelection`.
+            .onPreferenceChange(TabFramePreference.self) { frames in
+                scroller.tabFrames = frames
+                if pendingReason != nil || scroller.wantsAlign { alignToSelection() }
+            }
             // Not animated until this bar has drawn once.
             //
             // Every tab is a window and every window builds its own bar, so the bar you
@@ -61,6 +82,152 @@ struct CustomTabBarView: View {
             .onChange(of: currentTabIDs) { drawnTabIDs = $0 }
         }
         .frame(height: Self.height)
+        // Somewhere new to be.
+        .onChange(of: scrollTarget) { _ in
+            pendingReason = "selection"
+            alignToSelection()
+        }
+    }
+
+    // MARK: Scrolling
+
+    /// The one thing the bar should be showing.
+    ///
+    /// Read off the active section rather than off the selected tab. The two usually agree
+    /// — the active group is derived from the focused tab — but a group held open with
+    /// nothing in it is the exception, and there the selected tab is in some *other*
+    /// group. Scrolling to it would take the row away from the group the user just went
+    /// to.
+    private var scrollTarget: TabBarScrollTarget? {
+        guard let active = model.sections.first(where: \.isActive) else { return nil }
+        guard let tab = active.tabs.first(where: \.isSelected) ?? active.tabs.first else {
+            return .section(active.id)
+        }
+        return .tab(tab.id)
+    }
+
+    /// Where that thing is, in the row's own coordinates.
+    ///
+    /// Read out of the frames the bar already collects for dragging rather than measured
+    /// again. A `GeometryReader` per tab is not free, and a second one saying what the
+    /// first already said is the kind of cost that only shows up once there are thirty
+    /// tabs and fourteen bars redrawing on every one of them.
+    private var targetRect: CGRect? {
+        switch scrollTarget {
+        case .tab(let id):
+            return scroller.tabFrames[id]
+        case .section(let id):
+            return sectionFrames[id]
+        case nil:
+            return nil
+        }
+    }
+
+    /// Move the row the least it takes to bring the selection into sight, and not at all
+    /// if it is already there.
+    ///
+    /// Both rectangles are the row's own coordinates, so "already there" is a comparison
+    /// rather than a question asked of a framework, and the answer is a distance. What
+    /// that distance moves is the scroll view under the bar.
+    ///
+    /// Nothing happens during a drag: the drag positions the row itself, and scrolling
+    /// under it would take the tab out from under the pointer.
+    ///
+    /// And nothing happens without a reason to move — a selection landing somewhere, or
+    /// this bar coming back into view. A frame arriving is not a reason. The row's layout
+    /// settles over several passes (a tab joins, the ones around it make room, its title
+    /// arrives and widens it), and treating each pass as a fresh question restarts the
+    /// scroll on every one of them: one selection took four moves — 0→543, →559, →564,
+    /// →703 — which is the row juddering rather than moving.
+    ///
+    /// The catch is that the earliest pass is also the least accurate: that first move to
+    /// 543 was 160pt short of where the tab ended up. So a reason is answered twice. The
+    /// move goes out at once, on the best frame there is, and `settle` looks again once
+    /// the layout has stopped moving and closes the gap if one is left.
+    private func alignToSelection(settling: Bool = false) {
+        let reason = settling ? "settle" : (pendingReason ?? (scroller.wantsAlign ? "key" : "none"))
+        // Cleared here rather than where the second look succeeds: one that finds nothing
+        // to do is still the second look having happened.
+        if settling { settleScheduled = false }
+        guard settling || pendingReason != nil || scroller.wantsAlign else { return }
+        // Not while the user is holding the row. Their scroll is an instruction; ours is
+        // a guess about what they'd want.
+        guard !scroller.isUserScrolling else {
+            pendingReason = nil
+            scroller.alignHandled()
+            return
+        }
+        // Only the row in front. The others are copies that will take the scope's offset
+        // when their turn comes, and positioning them now is both invisible and a lie —
+        // by then the user may have dragged the row somewhere else entirely.
+        guard scroller.scrollView?.window?.isKeyWindow == true else {
+            pendingReason = nil
+            scroller.alignHandled()
+            return
+        }
+        guard tabDrag == nil, groupDrag == nil else { return }
+        guard let target = scrollTarget else { return }
+
+        // The frame in hand may still be the outgoing selection's — it is only the target's
+        // once the layout that drew the new one has run. The reason stays pending until it
+        // does.
+        guard let frame = targetRect else {
+            TabBarScrollLog.log("\(reason): waiting — no frame for \(target) yet")
+            return
+        }
+        guard let viewport = scroller.visibleRect else {
+            TabBarScrollLog.log("\(reason): no scroll view yet")
+            return
+        }
+
+        pendingReason = nil
+        scroller.alignHandled()
+
+        let delta: CGFloat
+        if frame.maxX > viewport.maxX - Self.scrollMargin {
+            delta = frame.maxX - viewport.maxX + Self.scrollMargin
+        } else if frame.minX < viewport.minX + Self.scrollMargin {
+            delta = frame.minX - viewport.minX - Self.scrollMargin
+        } else {
+            delta = 0
+        }
+
+        // Always animated. Arriving in place is `adoptSharedOffset`'s job and it has
+        // already happened by here, so anything left to do is the row genuinely moving and
+        // the user should see it move. Keying this off whether the bar had drawn before
+        // meant a bar rebuilt on its way to the front — which is most of them — did its
+        // move instantly.
+        let moved = delta == 0 ? nil : scroller.scroll(by: delta)
+
+        // Look again when the row has stopped rearranging itself. Only once, and only for
+        // a reason that was given: the second look is part of answering the first, not a
+        // standing invitation to keep moving.
+        if !settling, !settleScheduled {
+            settleScheduled = true
+            let generation = scroller.generation
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleDelay) {
+                settleScheduled = false
+                // The row is the user's now. This was booked to finish a move they have
+                // since overruled, and running it would take the row off wherever they
+                // put it, half a second after they put it there.
+                guard scroller.generation == generation else { return }
+                alignToSelection(settling: true)
+            }
+        }
+
+        // Built only when it will be read. `String(format:)` is an argument, so it runs
+        // whether or not the log wants it — on every alignment of every bar.
+        guard TabBarScrollLog.isEnabled else { return }
+        TabBarScrollLog.log(String(
+            format: "[%@] %@: target=%@ frame=[%.1f…%.1f] viewport=[%.1f…%.1f] delta=%.1f %@ moved=%@",
+            scroller.id,
+            reason,
+            String(describing: target),
+            frame.minX, frame.maxX,
+            viewport.minX, viewport.maxX,
+            delta,
+            scroller.state,
+            moved.map { String(format: "%.1f→%.1f", $0.from, $0.to) } ?? "none"))
     }
 
     private var currentTabIDs: Set<ObjectIdentifier> {
@@ -99,6 +266,16 @@ struct CustomTabBarView: View {
     /// looks like tabs going missing rather than like a sizing mistake.
     static let height: CGFloat = 36
     static let sectionSpacing: CGFloat = 3
+
+    /// How much of the row to leave beside a tab brought into sight, so it lands next to
+    /// the edge rather than flush against it — which reads as clipped rather than as the
+    /// end of the row.
+    static let scrollMargin: CGFloat = 8
+
+    /// How long to let the row rearrange itself before checking where the selection
+    /// actually came to rest. Longer than the bar's own spring, which is what is still
+    /// moving the tabs around while the first scroll is already under way.
+    static let settleDelay: TimeInterval = 0.35
     static let coordinateSpace = "CustomTabBar"
 }
 
