@@ -96,9 +96,34 @@ final class TabBarScroller {
     var tabFrames: [ObjectIdentifier: CGRect] = [:] { didSet { fulfill() } }
     var sectionFrames: [UUID: CGRect] = [:] { didSet { fulfill() } }
 
-    /// Whether a tab or group is being dragged. The drag positions the row itself, and
-    /// scrolling under it would take what's being dragged out from under the pointer.
-    var isDragging = false
+    /// Whether a tab or group is being dragged.
+    ///
+    /// A drag positions the row itself, so nothing that aims at the selection may move it.
+    /// The one thing that may is the drag reaching an edge — see `watchEdges`.
+    var isDragging = false {
+        didSet {
+            guard isDragging != oldValue else { return }
+            if isDragging {
+                // The drag has the row now. Anything already moving it was aiming at the
+                // selection, which is not what the user is doing.
+                driver?.invalidate()
+                driver = nil
+                settleWork?.cancel()
+                settleWork = nil
+                pending = nil
+                owner = .idle
+            }
+            watchEdges()
+        }
+    }
+
+    /// How far the row moved itself under a drag, as it happens.
+    ///
+    /// A drag holds an item at a translation, and a translation is only recomputed when
+    /// the pointer moves. Scrolling the row under a pointer that is holding still would
+    /// leave the item pinned to the row and sliding away with it, so the row says how far
+    /// it went and the drag adds that to what it is holding.
+    var onDragScroll: ((CGFloat) -> Void)?
 
     // MARK: State
 
@@ -133,6 +158,9 @@ final class TabBarScroller {
     /// What is stepping the row, while it is moving.
     private var driver: Timer?
 
+    /// What is watching the edges, while something is being dragged.
+    private var edgeWatch: Timer?
+
     private var boundsObserver: NSObjectProtocol?
     private var keyObserver: NSObjectProtocol?
     private var liveScrollObservers: [NSObjectProtocol] = []
@@ -152,6 +180,7 @@ final class TabBarScroller {
     deinit {
         settleWork?.cancel()
         driver?.invalidate()
+        edgeWatch?.invalidate()
         for observer in [keyObserver, boundsObserver].compactMap({ $0 }) + liveScrollObservers {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -345,6 +374,81 @@ final class TabBarScroller {
         1 - pow(1 - t, 3)
     }
 
+    // MARK: Dragging to the edge
+
+    /// Carry the row while a drag is held against either end of it.
+    ///
+    /// A drag can only drop something where it can see, and the row is a window onto more
+    /// than it shows — so without this, moving a tab to a group that is off the end is not
+    /// something the user can do at all. Holding the pointer at the edge is the way that
+    /// has always been asked for.
+    ///
+    /// Watched on a clock rather than driven by the drag's own updates. The gesture speaks
+    /// only when the pointer moves, and a pointer held at the edge is exactly a pointer
+    /// that has stopped moving — the moment this is most needed is the moment nothing
+    /// would arrive.
+    private func watchEdges() {
+        edgeWatch?.invalidate()
+        edgeWatch = nil
+        guard isDragging else { return }
+
+        let watch = Timer(timeInterval: Self.frame, repeats: true) { [weak self] timer in
+            guard let self, self.isDragging else {
+                timer.invalidate()
+                return
+            }
+            self.carryEdge()
+        }
+        edgeWatch = watch
+        RunLoop.main.add(watch, forMode: .common)
+    }
+
+    /// One tick of that carry: how far into an edge the pointer is, turned into a shift.
+    private func carryEdge() {
+        guard let scrollView, let window = scrollView.window, window.isKeyWindow else { return }
+
+        let pointer = scrollView.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        let bounds = scrollView.bounds
+
+        // A pointer that has left the bar is doing something else. Without this the row
+        // keeps travelling under a drag the user has taken somewhere entirely else, and
+        // comes back to a place they never chose.
+        guard pointer.y > bounds.minY - Self.reach, pointer.y < bounds.maxY + Self.reach else {
+            return
+        }
+
+        let depth: CGFloat
+        let direction: CGFloat
+        if pointer.x < bounds.minX + Self.edge {
+            depth = (bounds.minX + Self.edge - max(pointer.x, bounds.minX)) / Self.edge
+            direction = -1
+        } else if pointer.x > bounds.maxX - Self.edge {
+            depth = (min(pointer.x, bounds.maxX) - (bounds.maxX - Self.edge)) / Self.edge
+            direction = 1
+        } else {
+            return
+        }
+
+        // Squared, so the edge has a slow lip rather than a step: the last part of the row
+        // is somewhere the pointer passes through on its way to the end, and a drag that
+        // breaks into a run the moment it gets there is one you cannot aim.
+        let speed = Self.carrySpeed * depth * depth
+        shift(by: direction * speed * Self.frame)
+    }
+
+    /// Move the row now, by hand, and say how far it actually went.
+    private func shift(by delta: CGFloat) {
+        guard let scrollView else { return }
+        let clip = scrollView.contentView
+        let from = clip.bounds.origin.x
+        let to = min(max(from + delta, 0), furthest)
+        guard abs(to - from) > 0.01 else { return }
+
+        clip.setBoundsOrigin(NSPoint(x: to, y: clip.bounds.origin.y))
+        scrollView.reflectScrolledClipView(clip)
+        onDragScroll?(to - from)
+    }
+
     /// Give the row up.
     ///
     /// A moving row that ignores the trackpad is worse than one that never moved: where the
@@ -437,6 +541,17 @@ final class TabBarScroller {
     /// How often to step a moving row. A display's worth — anything finer is thrown away
     /// by the compositor, and anything coarser is visible as stepping.
     static let frame: TimeInterval = 1.0 / 60
+
+    /// How near an end the pointer has to be for the row to start carrying a drag along.
+    static let edge: CGFloat = 44
+
+    /// How far outside the bar the pointer may stray and still be counted as dragging
+    /// along it. Some slack, because a drag is held by hand and hands wander.
+    static let reach: CGFloat = 40
+
+    /// The fastest the row carries a drag, in points per second — reached only with the
+    /// pointer pressed right up against the end.
+    static let carrySpeed: CGFloat = 900
 
     /// How much of the row to leave beside a tab brought into sight, so it lands next to
     /// the edge rather than flush against it — which reads as clipped rather than as the
