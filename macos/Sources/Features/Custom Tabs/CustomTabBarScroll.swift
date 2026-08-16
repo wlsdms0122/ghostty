@@ -130,6 +130,9 @@ final class TabBarScroller {
     /// The second look, until it happens.
     private var settleWork: DispatchWorkItem?
 
+    /// What is stepping the row, while it is moving.
+    private var driver: Timer?
+
     private var boundsObserver: NSObjectProtocol?
     private var keyObserver: NSObjectProtocol?
     private var liveScrollObservers: [NSObjectProtocol] = []
@@ -148,6 +151,7 @@ final class TabBarScroller {
 
     deinit {
         settleWork?.cancel()
+        driver?.invalidate()
         for observer in [keyObserver, boundsObserver].compactMap({ $0 }) + liveScrollObservers {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -267,6 +271,12 @@ final class TabBarScroller {
     /// The clamp is why this is arithmetic and not a request: at the ends of the row a
     /// scroll view decides for itself what "into view" means, and the difference shows up
     /// as the row coming to rest somewhere unrelated.
+    ///
+    /// The movement is stepped here rather than handed to `animator()`. That proxy is the
+    /// documented way to animate a clip view and it does nothing in this bar: SwiftUI's
+    /// scroll view keeps its clip view non-layer-backed, so no animation is ever attached
+    /// — the row arrives at the far end in one frame. Measured: `animationKeys()` empty,
+    /// and the clip's bounds still at the old value after the animation group returns.
     private func scroll(by delta: CGFloat) {
         guard let scrollView else { return }
 
@@ -285,19 +295,54 @@ final class TabBarScroller {
         let token = flights
         owner = .flying(token: token, destination: to)
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = Self.duration
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            clip.animator().setBoundsOrigin(NSPoint(x: to, y: clip.bounds.origin.y))
-        } completionHandler: { [weak self, weak scrollView] in
-            // Only the flight this call started. By now the row may be on a later one, or
-            // in the user's hands, and either way this completion has nothing to say.
-            if let self, case .flying(let inFlight, _) = self.owner, inFlight == token {
+        let span = Self.duration(forDistance: abs(to - from))
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        driver?.invalidate()
+        let driver = Timer(timeInterval: Self.frame, repeats: true) { [weak self] timer in
+            guard let self, let scrollView = self.scrollView else { timer.invalidate(); return }
+
+            // Someone else has the row now — a later flight, or the user. Whoever it is is
+            // driving it, and two hands on the same row is the jitter this token exists to
+            // prevent.
+            guard case .flying(let inFlight, _) = self.owner, inFlight == token else {
+                timer.invalidate()
+                return
+            }
+
+            let progress = min(1, (CFAbsoluteTimeGetCurrent() - startedAt) / span)
+            let clip = scrollView.contentView
+            let x = from + (to - from) * CGFloat(Self.eased(progress))
+            clip.setBoundsOrigin(NSPoint(x: x, y: clip.bounds.origin.y))
+            scrollView.reflectScrolledClipView(clip)
+
+            if progress >= 1 {
+                timer.invalidate()
+                self.driver = nil
                 self.owner = .idle
             }
-            guard let scrollView else { return }
-            scrollView.reflectScrolledClipView(scrollView.contentView)
         }
+        self.driver = driver
+        // Common modes, so the row keeps moving through a menu tracking or a live resize
+        // rather than freezing halfway.
+        RunLoop.main.add(driver, forMode: .common)
+    }
+
+    /// How long a move of this length should take.
+    ///
+    /// Not one number for every distance. A row crossing its whole length in the time a
+    /// neighbouring tab takes is not fast, it is a cut — there is nothing on screen long
+    /// enough to follow, and the end of the journey is the first thing you see. Growing
+    /// the time with the distance keeps the *speed* of the row roughly recognisable, and
+    /// the cap keeps a long move from turning into something to wait for.
+    private static func duration(forDistance distance: CGFloat) -> TimeInterval {
+        let reach = min(1, Double(distance) / 800)
+        return 0.14 + (0.32 - 0.14) * reach
+    }
+
+    /// Fast off the mark and easing into place — the row is answering something the user
+    /// just did, so the response wants to be immediate and the arrival calm.
+    private static func eased(_ t: Double) -> Double {
+        1 - pow(1 - t, 3)
     }
 
     /// Give the row up.
@@ -307,21 +352,15 @@ final class TabBarScroller {
     /// reaching for it is not a guess. So the scroll in flight stops where it has got to,
     /// the second look is called off, and anything owed is written off.
     ///
-    /// Stopping means replacing the animation with an instant one to where the row has
-    /// actually reached. Just marking it over would leave Core Animation still driving the
-    /// bounds, which is the very thing that was overriding the user.
+    /// Stopping is the whole of it now that the row is stepped here: drop the driver and
+    /// the row is already where it last put it. Nothing else is holding the bounds.
     private func yieldToUser() {
-
         settleWork?.cancel()
         settleWork = nil
         pending = nil
 
-        if isFlying, let clip = scrollView?.contentView {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0
-                clip.animator().setBoundsOrigin(clip.bounds.origin)
-            }
-        }
+        driver?.invalidate()
+        driver = nil
         owner = .user
     }
 
@@ -395,13 +434,9 @@ final class TabBarScroller {
         return max(0, content - scrollView.contentView.bounds.width)
     }
 
-    private var isFlying: Bool {
-        if case .flying = owner { return true }
-        return false
-    }
-
-
-    static let duration: TimeInterval = 0.18
+    /// How often to step a moving row. A display's worth — anything finer is thrown away
+    /// by the compositor, and anything coarser is visible as stepping.
+    static let frame: TimeInterval = 1.0 / 60
 
     /// How much of the row to leave beside a tab brought into sight, so it lands next to
     /// the edge rather than flush against it — which reads as clipped rather than as the
