@@ -16,7 +16,13 @@ extension TerminalRestorableState {
         let tabColor: TerminalTabColor?
         let titleOverride: String?
 
-        // MARK: - Version 8 (fork: custom tab groups)
+        // MARK: - Fork: custom tab groups
+        //
+        // Added without moving the version. Every field here is optional, so a state
+        // written before them decodes with nils and one written with them is read by
+        // anything that ignores what it doesn't know — the version gates nothing. It is
+        // upstream's number to spend, and spending it here only takes the one they will
+        // want next for a change that means something.
         let customTabScopeID: UUID?
         let customTabGroupID: UUID?
 
