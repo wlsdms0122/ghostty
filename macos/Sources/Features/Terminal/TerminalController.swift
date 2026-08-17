@@ -1498,6 +1498,11 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             }
         }
 
+        // Marked as the move it is, so the custom tab bar doesn't read the re-add as a
+        // tab arriving and hand it a group it was never in.
+        let reorder = CustomTabsTerminalWindow.beginTabReorder(selectedWindow)
+        defer { reorder.end() }
+
         // Begin a group of window operations to minimize visual updates
         NSAnimationContext.beginGrouping()
         NSAnimationContext.current.duration = 0
