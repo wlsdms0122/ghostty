@@ -9,6 +9,9 @@ struct CustomTabItem: Identifiable, Equatable {
     let color: TerminalTabColor
     let groupID: UUID?
     let isSelected: Bool
+
+    /// Whether the tab's shell is running a command rather than waiting at its prompt.
+    let isBusy: Bool
 }
 
 /// A run of tabs sharing a group, as rendered by the bar.
@@ -124,6 +127,30 @@ class CustomTabBarModel: ObservableObject {
                 self?.setNeedsRefresh()
             })
         }
+
+        // Filtered, unlike the rest. Every command that starts or ends anywhere in the
+        // app posts this, and redrawing a bar walks the surfaces of every tab it holds
+        // to see which are working — so an unfiltered one would have each window's bar
+        // recount itself every time a command ran in any other.
+        //
+        // Asked of the trees the bar reads, not of the surface's window: a zoomed split
+        // takes its siblings out of the view hierarchy, so their window is nil while
+        // their state still counts.
+        tokens.append(center.addObserver(
+            forName: .ghosttyCommandRunningDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else { return }
+            guard let surface = notification.object as? Ghostty.SurfaceView else { return }
+            guard self.members.contains(where: { window in
+                guard let controller = window.windowController as? BaseTerminalController
+                else { return false }
+                return controller.surfaceTree.contains { $0 === surface }
+            }) else { return }
+
+            self.setNeedsRefresh()
+        })
     }
 
     deinit {
@@ -186,7 +213,8 @@ class CustomTabBarModel: ObservableObject {
                 title: w.title.isEmpty ? "Terminal" : w.title,
                 color: (w as? TerminalWindow)?.tabColor ?? .none,
                 groupID: (w as? CustomTabsTerminalWindow)?.customTabGroupID,
-                isSelected: w === selected)
+                isSelected: w === selected,
+                isBusy: isRunningCommand(w))
         }
 
         if next != tabs { tabs = next }
@@ -232,6 +260,18 @@ class CustomTabBarModel: ObservableObject {
         if let pending = registry.pendingActive { return pending.groupID }
         guard let selected = reference?.tabGroup?.selectedWindow ?? reference else { return nil }
         return groupID(of: selected)
+    }
+
+    /// Whether a tab has a command running in it.
+    ///
+    /// A tab is a window and a window holds a tree of surfaces, so the tab is working if
+    /// any one of them is. The state itself comes from shell integration, which means a
+    /// shell without it simply never reads as working.
+    private func isRunningCommand(_ window: NSWindow) -> Bool {
+        guard let controller = window.windowController as? BaseTerminalController else {
+            return false
+        }
+        return controller.surfaceTree.contains { $0.commandRunning }
     }
 
     private func groupID(of window: NSWindow) -> UUID? {
