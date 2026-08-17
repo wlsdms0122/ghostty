@@ -274,10 +274,15 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
         return body()
     }
 
-    /// Tabs the user can actually see right now: the ones in the active group.
+    /// The tabs a tab action applies to: the ones in the group being worked in.
+    ///
+    /// Every group shows its tabs, so this is no longer "what is on screen" — it is the
+    /// group the focused tab is in, and the point of it is that tab actions stay inside
+    /// that group. Go to tab 3 means the third of these, closing the others leaves the
+    /// other groups alone, and a move can't slide a tab out of the group it belongs to.
     ///
     /// Read off the bar's model rather than worked out again here. "Which group is
-    /// showing" and "which group ids this scope still defines" are the model's to
+    /// active" and "which group ids this scope still defines" are the model's to
     /// answer; a second copy of that reasoning drifted from it, and a tab pointing at a
     /// group the scope no longer defines was drawn in the default section while counting
     /// as a scope of one for every action.
@@ -380,8 +385,8 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
 extension NSWindow {
     /// The tabs a *tab-level* action on this window applies to.
     ///
-    /// This is the whole tab group everywhere except the custom titlebar style, where
-    /// only the active group's tabs are on screen. Anything that counts, indexes or
+    /// This is the whole tab group everywhere except the custom titlebar style, where it
+    /// is the group being worked in. Anything that counts, indexes or
     /// sweeps tabs as tabs — go to tab N, move tab, close the others, close the ones to
     /// the right, and the menu validation that decides whether those are available —
     /// reads the set through here, so it acts on the set the user can see.
@@ -392,9 +397,9 @@ extension NSWindow {
     ///
     /// One entry point rather than a substitution at each call site: the two are
     /// interchangeable under the stock styles, so a call site that keeps reading
-    /// `tabGroup.windows` looks correct and stays correct until someone collapses a
-    /// group. "Close Other Tabs" reaching into a collapsed group and killing terminals
-    /// the user couldn't see was exactly that.
+    /// `tabGroup.windows` looks correct and stays correct until someone makes a group.
+    /// "Close Other Tabs" reaching across groups and closing terminals the user wasn't
+    /// acting on was exactly that.
     ///
     /// Falls back to `[self]` for a lone window so callers get the same "just me" answer
     /// whether or not a tab group exists.
