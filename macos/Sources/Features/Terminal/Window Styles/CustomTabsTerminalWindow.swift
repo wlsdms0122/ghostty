@@ -187,6 +187,10 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
         // its own.
         child.setTabScope(tabScopeID)
 
+        // A move is not an arrival. The tab already has the group it should keep, and
+        // for an ungrouped one there is nothing below to tell the two cases apart.
+        guard !Self.isReordering(child) else { return }
+
         // Only fill in a group that isn't already set, so moving an existing tab in
         // here doesn't reassign it.
         guard child.customTabGroupID == nil else { return }
@@ -217,15 +221,56 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
     static var isInsertingTab: Bool { insertionDepth > 0 }
     private static var insertionDepth = 0
 
-    /// Run a change to the tab group with the bar held still until it's done.
+    /// The tab being moved within its tab group right now, if any.
+    ///
+    /// The add half of a move lands in `addTabbedWindow` looking exactly like a new tab
+    /// arriving, and for an ungrouped tab there is nothing there to tell the two apart:
+    /// `customTabGroupID == nil` means both "not assigned yet" and "deliberately in no
+    /// group". So the re-add handed the tab whichever group the selection had drifted to
+    /// while it was out of the group — which is what moving a selected ungrouped tab did.
+    ///
+    /// Names the window rather than counting moves. AppKit turns the runloop during an
+    /// insert, so a real tab opening elsewhere can land inside the pair; against a
+    /// count, that tab would be taken for the one being moved and open with no group at
+    /// all — a silent, permanent loss, since nothing later puts it right.
+    private static var reorderingWindow: ObjectIdentifier?
+
+    static func isReordering(_ window: NSWindow) -> Bool {
+        reorderingWindow == ObjectIdentifier(window)
+    }
+
+    /// Mark the start of a move of one tab within its tab group.
     ///
     /// Reordering is a remove followed by an add, and in between the tab is in no tab
     /// group at all. A snapshot from that gap is missing it, so everything to its right
     /// slides over by its width and back again — worst at the far end of the bar, where
-    /// the shift is the whole width of the tab.
-    static func withTabGroupHeld<T>(_ body: () -> T) -> T {
+    /// the shift is the whole width of the tab. The bar is held still for the pair, and
+    /// the add is marked as the move it is rather than an arrival.
+    ///
+    /// Handed back as a token to end rather than taking the move as a closure, so that
+    /// a call site can mark an existing block with `defer` instead of being wrapped in
+    /// one. `withTabReorder` is the same thing where a closure reads better.
+    static func beginTabReorder(_ window: NSWindow) -> TabReorder {
         insertionDepth += 1
-        defer { insertionDepth -= 1 }
+        let previous = reorderingWindow
+        reorderingWindow = ObjectIdentifier(window)
+        return TabReorder(previous: previous)
+    }
+
+    /// The end of a move, held so it can be given back.
+    struct TabReorder {
+        fileprivate let previous: ObjectIdentifier?
+
+        func end() {
+            insertionDepth -= 1
+            reorderingWindow = previous
+        }
+    }
+
+    /// Run a move of one tab within its tab group.
+    static func withTabReorder<T>(_ window: NSWindow, _ body: () -> T) -> T {
+        let reorder = beginTabReorder(window)
+        defer { reorder.end() }
         return body()
     }
 

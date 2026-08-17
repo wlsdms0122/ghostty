@@ -495,7 +495,7 @@ class CustomTabBarModel: ObservableObject {
 
         let wasSelected = tabGroup.selectedWindow === moved
 
-        CustomTabsTerminalWindow.withTabGroupHeld {
+        CustomTabsTerminalWindow.withTabReorder(moved) {
             NSAnimationContext.beginGrouping()
             NSAnimationContext.current.duration = 0
             tabGroup.removeWindow(moved)
@@ -535,7 +535,7 @@ class CustomTabBarModel: ObservableObject {
 
         let wasSelected = tabGroup.selectedWindow === moved
 
-        CustomTabsTerminalWindow.withTabGroupHeld {
+        CustomTabsTerminalWindow.withTabReorder(moved) {
             NSAnimationContext.beginGrouping()
             NSAnimationContext.current.duration = 0
             tabGroup.removeWindow(moved)
