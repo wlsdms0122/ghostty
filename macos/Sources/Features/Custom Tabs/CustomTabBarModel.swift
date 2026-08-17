@@ -105,6 +105,41 @@ class CustomTabBarModel: ObservableObject {
     /// each other into one.
     var registry: CustomTabGroupRegistry { .store(for: scopeID) }
 
+    /// How far the bar is scrolled, shared by every window in this scope.
+    ///
+    /// A tab is a window and a window draws its own bar, so a scope with fourteen tabs has
+    /// fourteen rows — but the user is looking at one bar that stays put while the tabs
+    /// behind it change. Scrolling is the one thing that breaks that illusion: dragging
+    /// the row moves only the copy on screen, and the next tab brings forward a copy still
+    /// sitting where it was last left. The row appears to jump, and no amount of care
+    /// about *where to scroll to* helps, because the scroll views are different.
+    ///
+    /// So the offset lives with the scope, and each bar takes it on when it comes forward.
+    /// Deliberately not `@Published`: this is where the row is, not something the bar is
+    /// drawn from, and republishing it on every scrolled pixel would redraw fourteen bars.
+    var rowOffset: CGFloat = 0
+
+    /// The one thing the bar should be showing.
+    ///
+    /// A fact about the scope, not about any window's view of it, which is why it lives
+    /// here: the bar of a tab that isn't selected is inside a window that is ordered out,
+    /// and SwiftUI stops updating the views in one of those. A copy of this held in view
+    /// state would be as stale as the view, and stale is exactly what it must not be at
+    /// the moment a window comes forward and asks where to stand.
+    ///
+    /// Read off the active section rather than off the selected tab. The two usually agree
+    /// — the active group is derived from the focused tab — but a group held open with
+    /// nothing in it is the exception, and there the selected tab is in some *other*
+    /// group. Scrolling to it would take the row away from the group the user just went
+    /// to, so the empty group's header stands in.
+    var scrollTarget: TabBarScrollTarget? {
+        guard let active = sections.first(where: \.isActive) else { return nil }
+        guard let tab = active.tabs.first(where: \.isSelected) ?? active.tabs.first else {
+            return .section(active.id)
+        }
+        return .tab(tab.id)
+    }
+
     private weak var observedTabGroup: NSWindowTabGroup?
     private var windowsObservation: NSKeyValueObservation?
     private var tokens: [NSObjectProtocol] = []
