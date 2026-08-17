@@ -23,8 +23,9 @@ struct CustomTabSection: Identifiable, Equatable {
     let group: CustomTabGroup?
     let tabs: [CustomTabItem]
 
-    /// Only the active section shows its tabs. The rest are collapsed to their header,
-    /// which doubles as the switcher.
+    /// Whether this is the section being worked in — the one drawn lit, the one a new
+    /// tab lands in, and the one every tab action counts through. Every section shows
+    /// its tabs either way.
     let isActive: Bool
 
     var name: String { group?.name ?? "Default" }

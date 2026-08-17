@@ -161,9 +161,10 @@ struct DragSlots<ID: Hashable> {
     /// The edge that does the testing depends on which way the item is going: its
     /// leading edge when moving left, its trailing edge when moving right. Testing the
     /// item's *center* instead only works while everything is about the same width. The
-    /// active group is as wide as all its tabs, and its center can't reach the center of
-    /// a collapsed group without the item leaving the row entirely — so with the row
-    /// clamped, a wide group simply could never be moved in front of a narrow one.
+    /// a group holding many tabs is far wider than one holding a single tab, and its
+    /// center can't reach the other's without the item leaving the row entirely — so
+    /// with the row clamped, a wide group simply could never be moved in front of a
+    /// narrow one.
     ///
     /// Counting how many other items the edge has passed is monotonic in the item's
     /// position, so the target can't flip back and forth while it holds still.
@@ -288,8 +289,9 @@ private struct CustomTabSectionView: View {
                 groupDrag: $groupDrag,
                 sectionFrames: $sectionFrames)
 
-            // Only the active group shows its tabs; the rest collapse to their header.
-            if section.isActive && !section.tabs.isEmpty {
+            // Every group shows its tabs. The active one is lit and is what tab actions
+            // apply to; the rest are there to be seen and clicked into.
+            if !section.tabs.isEmpty {
                 CustomTabStripView(
                     section: section,
                     model: model,
@@ -371,8 +373,13 @@ private struct CustomTabGroupHeaderView: View {
                 .font(.system(size: 11, weight: .medium))
                 .lineLimit(1)
 
-            // A collapsed group shows how much is hidden inside it.
-            if !section.isActive && !section.tabs.isEmpty {
+            // How many tabs the section holds, drawn whether or not it is the active one.
+            //
+            // Showing it only on the inactive ones meant adding and removing it in the
+            // same frame as the section resized around it, and the two animate on their
+            // own terms: the count landed at its final position immediately while the
+            // header was still growing, so it came away from the name it belongs to.
+            if !section.tabs.isEmpty {
                 Text("\(section.tabs.count)")
                     .font(.system(size: 10, weight: .medium))
                     .opacity(0.6)
