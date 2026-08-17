@@ -785,6 +785,11 @@ pub const Application = extern struct {
             .toggle_split_zoom => return Action.toggleSplitZoom(target),
             .show_on_screen_keyboard => return Action.showOnScreenKeyboard(target),
             .command_finished => return Action.commandFinished(target, value),
+            // GTK has nowhere to draw a running command yet. Reported as unhandled
+            // rather than silently accepted — that is what the return value is for —
+            // but without the log line the unimplemented group carries, since these
+            // arrive with every command.
+            .command_started, .command_ended => return false,
             .readonly => return Action.setReadonly(target, value),
 
             .start_search => Action.startSearch(target, value),

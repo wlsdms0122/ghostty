@@ -557,3 +557,16 @@ class CustomTabBarModel: ObservableObject {
         return windows.first { ObjectIdentifier($0) == id }
     }
 }
+
+// MARK: - Notifications
+
+extension Notification.Name {
+    /// Posted on a surface view when its shell started or finished a command.
+    ///
+    /// Declared here rather than beside the other Ghostty notifications, even though
+    /// `Ghostty.App` is what posts it: this is the only thing in the fork that reads it,
+    /// and a name is something a file can carry on its own. The list upstream keeps is a
+    /// file the fork would otherwise have to hold a line in forever.
+    static let ghosttyCommandRunningDidChange = Notification.Name(
+        "com.mitchellh.ghostty.ghosttyCommandRunningDidChange")
+}
