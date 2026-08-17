@@ -23,6 +23,11 @@ struct CustomTabBarView: View {
     /// apart from one that merely rearranges or resizes what's already there.
     @State private var drawnTabIDs: Set<ObjectIdentifier> = []
 
+    /// Everything about the row's scrolling. The bar hands it what it measures and says
+    /// what should be visible; when and how the row moves is its own. See
+    /// `CustomTabBarScroll.swift`.
+    @State private var scroller = TabBarScroller()
+
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Self.sectionSpacing) {
@@ -39,10 +44,19 @@ struct CustomTabBarView: View {
 
                 Spacer(minLength: 0)
             }
+            .background(TabBarScrollViewBridge(scroller: scroller, model: model))
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .coordinateSpace(name: Self.coordinateSpace)
-            .onPreferenceChange(SectionFramePreference.self) { sectionFrames = $0 }
+            // Frames are numbers a move needs, not a reason to make one. Handing them over
+            // is also how a move the scroller already owes learns its number has arrived.
+            .onPreferenceChange(SectionFramePreference.self) { frames in
+                sectionFrames = frames
+                scroller.sectionFrames = frames
+            }
+            .onPreferenceChange(TabFramePreference.self) { frames in
+                scroller.tabFrames = frames
+            }
             // Not animated until this bar has drawn once.
             //
             // Every tab is a window and every window builds its own bar, so the bar you
@@ -61,6 +75,50 @@ struct CustomTabBarView: View {
             .onChange(of: currentTabIDs) { drawnTabIDs = $0 }
         }
         .frame(height: Self.height)
+        // Somewhere new to be. The other thing that asks — this bar coming forward — is
+        // AppKit's to notice, and the scroller hears it directly.
+        .onChange(of: model.scrollTarget) { _ in scroller.requestAlign(.selection) }
+        // A drag positions the row itself, so nothing aiming at the selection may move it
+        // for as long as one is in flight. Carrying a drag held at either end is the one
+        // exception, and it reports back through `onDragScroll`.
+        .onChange(of: tabDrag != nil || groupDrag != nil) { scroller.isDragging = $0 }
+        // Bindings only, and never the view: the scroller is this view's own state, so a
+        // closure holding the view would hold the scroller that holds the closure — one
+        // leaked bar per window.
+        .onAppear {
+            scroller.onDragScroll = { [$tabDrag, $groupDrag, $sectionFrames] delta in
+                Self.carry(delta, tab: $tabDrag, group: $groupDrag, sections: $sectionFrames)
+            }
+        }
+    }
+
+    /// The row moved itself under a drag: hand the distance to whatever is being dragged.
+    ///
+    /// A drag holds its item at a translation measured from where it was grabbed, and that
+    /// translation is recomputed only when the pointer moves. So the row moving is the
+    /// pointer moving, as far as the drag is concerned — the same distance, the other way
+    /// — and everything downstream of it, the item's position and the slot it has reached,
+    /// follows from saying so.
+    /// Static, and handed only the state it moves — the closure that calls it outlives
+    /// any one rendering of this view.
+    private static func carry(
+        _ delta: CGFloat,
+        tab: Binding<TabDragState?>,
+        group: Binding<GroupDragState?>,
+        sections: Binding<[UUID: CGRect]>
+    ) {
+        if tab.wrappedValue != nil {
+            tab.wrappedValue?.translation += delta
+            tab.wrappedValue?.crossingTo = tab.wrappedValue?.crossing(in: sections.wrappedValue)
+            if let next = tab.wrappedValue?.reordered() {
+                withAnimation(TabDragState.settle) { tab.wrappedValue?.order = next }
+            }
+        } else if group.wrappedValue != nil {
+            group.wrappedValue?.translation += delta
+            if let next = group.wrappedValue?.reordered() {
+                withAnimation(GroupDragState.reorder) { group.wrappedValue?.order = next }
+            }
+        }
     }
 
     private var currentTabIDs: Set<ObjectIdentifier> {
@@ -161,9 +219,10 @@ struct DragSlots<ID: Hashable> {
     /// The edge that does the testing depends on which way the item is going: its
     /// leading edge when moving left, its trailing edge when moving right. Testing the
     /// item's *center* instead only works while everything is about the same width. The
-    /// active group is as wide as all its tabs, and its center can't reach the center of
-    /// a collapsed group without the item leaving the row entirely — so with the row
-    /// clamped, a wide group simply could never be moved in front of a narrow one.
+    /// a group holding many tabs is far wider than one holding a single tab, and its
+    /// center can't reach the other's without the item leaving the row entirely — so
+    /// with the row clamped, a wide group simply could never be moved in front of a
+    /// narrow one.
     ///
     /// Counting how many other items the edge has passed is monotonic in the item's
     /// position, so the target can't flip back and forth while it holds still.
@@ -212,6 +271,29 @@ struct GroupDragState {
     var correction: CGFloat {
         slots.x(of: id, in: startOrder) - slots.x(of: id, in: order)
     }
+
+    /// The order this drag's position now implies, or nil if it is the one already held.
+    ///
+    /// Asked both by the pointer moving and by the row moving under a pointer that isn't:
+    /// they are the same event to the row, and answering them in one place is what keeps
+    /// them from drifting apart.
+    func reordered() -> [UUID]? {
+        guard let from = order.firstIndex(of: id) else { return nil }
+
+        // The default section stays put at the head, so slot 0 isn't a target.
+        let to = max(
+            slots.insertionIndex(
+                of: id, in: order, startOrder: startOrder, translation: clampedTranslation), 1)
+        guard to != from, order.indices.contains(to) else { return nil }
+
+        var next = order
+        next.remove(at: from)
+        next.insert(id, at: to)
+        return next
+    }
+
+    /// How the row rearranges itself around a group being dragged.
+    static let reorder: Animation = .spring(response: 0.25, dampingFraction: 0.85)
 }
 
 /// An in-progress tab drag.
@@ -246,6 +328,53 @@ struct TabDragState {
     var startX: CGFloat {
         slots.x(of: id, in: startOrder) - slots.origin
     }
+
+    /// The order this drag's position now implies, or nil if it is the one already held.
+    /// See `GroupDragState.reordered`.
+    func reordered() -> [ObjectIdentifier]? {
+        guard let from = order.firstIndex(of: id) else { return nil }
+        let to = slots.insertionIndex(
+            of: id, in: order, startOrder: startOrder, translation: translation)
+        guard to != from, order.indices.contains(to) else { return nil }
+
+        var next = order
+        next.remove(at: from)
+        next.insert(id, at: to)
+        return next
+    }
+
+    /// Another section this tab has moved onto, or nil while it is still in its own.
+    ///
+    /// Read off the tab, not the pointer, for the same reason the reorder is: the pointer
+    /// is wherever the tab was grabbed. Grab one near its left edge and the pointer leaves
+    /// the section while most of the tab is still inside it — which a quick drag then
+    /// commits as a group change the user never asked for.
+    ///
+    /// Reordering inside a group must never be read as leaving it, so this only answers
+    /// once the tab's center is outside its own section entirely.
+    ///
+    /// Like `reordered`, asked both by the pointer moving and by the row moving under a
+    /// pointer that isn't: carrying a tab to a group that was off the end is the whole
+    /// point of the row moving at all.
+    func crossing(in sections: [UUID: CGRect]) -> UUID? {
+        let center = slots.x(of: id, in: startOrder) + translation + (slots.widths[id] ?? 0) / 2
+
+        // Horizontal only. The bar is a single row, so a vertical test says nothing except
+        // that the pointer wandered off the titlebar.
+        if let own = sections[sectionID], (own.minX...own.maxX).contains(center) { return nil }
+
+        return sections.first { id, frame in
+            id != sectionID && (frame.minX...frame.maxX).contains(center)
+        }?.key
+    }
+
+    /// How long the row takes to settle around a tab being dragged or dropped.
+    static let settleDuration: TimeInterval = 0.22
+
+    /// Critically damped so the tabs being pushed aside don't overshoot. If they do,
+    /// letting go mid-flight drops the dragged tab into a slot that is momentarily past
+    /// where it will end up, and it has to come back — the small jolt on release.
+    static let settle: Animation = .spring(response: settleDuration, dampingFraction: 1)
 }
 
 /// Collects section frames so group drags and cross-group drops can tell what they're
@@ -288,8 +417,9 @@ private struct CustomTabSectionView: View {
                 groupDrag: $groupDrag,
                 sectionFrames: $sectionFrames)
 
-            // Only the active group shows its tabs; the rest collapse to their header.
-            if section.isActive && !section.tabs.isEmpty {
+            // Every group shows its tabs. The active one is lit and is what tab actions
+            // apply to; the rest are there to be seen and clicked into.
+            if !section.tabs.isEmpty {
                 CustomTabStripView(
                     section: section,
                     model: model,
@@ -371,8 +501,13 @@ private struct CustomTabGroupHeaderView: View {
                 .font(.system(size: 11, weight: .medium))
                 .lineLimit(1)
 
-            // A collapsed group shows how much is hidden inside it.
-            if !section.isActive && !section.tabs.isEmpty {
+            // How many tabs the section holds, drawn whether or not it is the active one.
+            //
+            // Showing it only on the inactive ones meant adding and removing it in the
+            // same frame as the section resized around it, and the two animate on their
+            // own terms: the count landed at its final position immediately while the
+            // header was still growing, so it came away from the name it belongs to.
+            if !section.tabs.isEmpty {
                 Text("\(section.tabs.count)")
                     .font(.system(size: 10, weight: .medium))
                     .opacity(0.6)
@@ -447,23 +582,8 @@ private struct CustomTabGroupHeaderView: View {
     }
 
     private func reorderIfNeeded() {
-        guard let drag = groupDrag else { return }
-        var order = drag.order
-        guard let from = order.firstIndex(of: section.id) else { return }
-
-        // The default section stays put at the head, so slot 0 isn't a target.
-        let to = max(drag.slots.insertionIndex(
-            of: section.id,
-            in: order,
-            startOrder: drag.startOrder,
-            translation: drag.clampedTranslation), 1)
-        guard to != from, order.indices.contains(to) else { return }
-
-        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
-            order.remove(at: from)
-            order.insert(section.id, at: to)
-            groupDrag?.order = order
-        }
+        guard groupDrag?.id == section.id, let next = groupDrag?.reordered() else { return }
+        withAnimation(GroupDragState.reorder) { groupDrag?.order = next }
     }
 
     private func commit(group: UUID) {
@@ -615,7 +735,7 @@ struct CustomTabStripView: View {
                 guard tabDrag?.id == tab.id else { return }
 
                 tabDrag?.translation = value.translation.width
-                tabDrag?.crossingTo = crossedSection()
+                tabDrag?.crossingTo = tabDrag?.crossing(in: sectionFrames)
                 reorderIfNeeded(tab)
             }
             .onEnded { value in
@@ -632,53 +752,9 @@ struct CustomTabStripView: View {
             }
     }
 
-    /// Another section the dragged tab has moved onto.
-    ///
-    /// Read off the tab, not the pointer, for the same reason the reorder is: the
-    /// pointer is wherever the tab was grabbed. Grab one near its left edge and the
-    /// pointer leaves the section while most of the tab is still inside it — which a
-    /// quick drag then commits as a group change the user never asked for.
-    ///
-    /// Reordering inside a group must never be read as leaving it, so this only answers
-    /// once the tab's center is outside this section entirely.
-    private func crossedSection() -> UUID? {
-        guard let drag = tabDrag else { return nil }
-
-        let center = drag.slots.x(of: drag.id, in: drag.startOrder)
-            + drag.translation
-            + (drag.slots.widths[drag.id] ?? 0) / 2
-
-        // Horizontal only. The bar is a single row, so a vertical test says nothing
-        // except that the pointer wandered off the titlebar.
-        if let own = sectionFrames[section.id], (own.minX...own.maxX).contains(center) {
-            return nil
-        }
-
-        return sectionFrames.first { id, frame in
-            id != section.id && (frame.minX...frame.maxX).contains(center)
-        }?.key
-    }
-
     private func reorderIfNeeded(_ tab: CustomTabItem) {
-        guard let drag = tabDrag else { return }
-        var order = drag.order
-        guard let from = order.firstIndex(of: tab.id) else { return }
-
-        let to = drag.slots.insertionIndex(
-            of: tab.id,
-            in: order,
-            startOrder: drag.startOrder,
-            translation: drag.translation)
-        guard to != from, order.indices.contains(to) else { return }
-
-        // Critically damped so the tabs being pushed aside don't overshoot. If they do,
-        // letting go mid-flight drops the dragged tab into a slot that is momentarily
-        // past where it will end up, and it has to come back — the small jolt on release.
-        withAnimation(Self.settle) {
-            order.remove(at: from)
-            order.insert(tab.id, at: to)
-            tabDrag?.order = order
-        }
+        guard tabDrag?.id == tab.id, let next = tabDrag?.reordered() else { return }
+        withAnimation(TabDragState.settle) { tabDrag?.order = next }
     }
 
     private func commit(_ tab: CustomTabItem) {
@@ -735,8 +811,8 @@ struct CustomTabStripView: View {
     /// Movement the user isn't driving directly: settling into a slot, and the tabs
     /// making room. Critically damped — anything that overshoots has to come back, and
     /// coming back is what reads as a jolt.
-    private static let settleDuration: TimeInterval = 0.22
-    private static let settle: Animation = .spring(response: settleDuration, dampingFraction: 1)
+    private static let settleDuration = TabDragState.settleDuration
+    private static let settle = TabDragState.settle
 }
 
 // MARK: - Tab
@@ -755,17 +831,26 @@ private struct CustomTabView: View {
                 .truncationMode(.tail)
                 .font(.system(size: 12))
 
-            // The close button always holds its place and only fades in on hover, so
-            // hovering doesn't resize the tab and shove its neighbors around.
+            // One slot for two things that are never wanted at once: the close button
+            // while the pointer is here, and otherwise a pulse while the shell is
+            // working. The slot always holds its place, so neither hovering a tab nor a
+            // command starting in it resizes the tab and shoves its neighbours around.
             Button {
                 model.close(tab.id)
             } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .bold))
+                ZStack {
+                    if tab.isBusy {
+                        BusyIndicator()
+                            .opacity(isHovering ? 0 : 1)
+                    }
+
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .opacity(isHovering ? 1 : 0)
+                }
             }
             .buttonStyle(.plain)
             .frame(width: 12)
-            .opacity(isHovering ? 1 : 0)
             .allowsHitTesting(isHovering)
         }
         .padding(.leading, 10)
@@ -812,6 +897,25 @@ private struct CustomTabView: View {
     private var border: Color {
         guard tab.isSelected, tab.color != .none else { return .clear }
         return tint.opacity(0.9)
+    }
+}
+
+/// A dot that breathes while a tab's shell is working.
+///
+/// Its own view so the repeating animation belongs to something that exists only while
+/// the shell is busy. Driven from `onAppear` rather than from the busy flag: the flag
+/// changes in the same snapshot as everything else the bar redraws, and an animation
+/// started from there is swept up by the bar's own — the dot ends up following the
+/// spring the tabs move on instead of pulsing.
+private struct BusyIndicator: View {
+    @State private var dim = false
+
+    var body: some View {
+        Circle()
+            .frame(width: 5, height: 5)
+            .opacity(dim ? 0.25 : 1)
+            .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true), value: dim)
+            .onAppear { dim = true }
     }
 }
 

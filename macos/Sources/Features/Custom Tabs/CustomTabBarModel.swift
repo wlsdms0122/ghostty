@@ -9,6 +9,9 @@ struct CustomTabItem: Identifiable, Equatable {
     let color: TerminalTabColor
     let groupID: UUID?
     let isSelected: Bool
+
+    /// Whether the tab's shell is running a command rather than waiting at its prompt.
+    let isBusy: Bool
 }
 
 /// A run of tabs sharing a group, as rendered by the bar.
@@ -23,8 +26,9 @@ struct CustomTabSection: Identifiable, Equatable {
     let group: CustomTabGroup?
     let tabs: [CustomTabItem]
 
-    /// Only the active section shows its tabs. The rest are collapsed to their header,
-    /// which doubles as the switcher.
+    /// Whether this is the section being worked in — the one drawn lit, the one a new
+    /// tab lands in, and the one every tab action counts through. Every section shows
+    /// its tabs either way.
     let isActive: Bool
 
     var name: String { group?.name ?? "Default" }
@@ -101,6 +105,41 @@ class CustomTabBarModel: ObservableObject {
     /// each other into one.
     var registry: CustomTabGroupRegistry { .store(for: scopeID) }
 
+    /// How far the bar is scrolled, shared by every window in this scope.
+    ///
+    /// A tab is a window and a window draws its own bar, so a scope with fourteen tabs has
+    /// fourteen rows — but the user is looking at one bar that stays put while the tabs
+    /// behind it change. Scrolling is the one thing that breaks that illusion: dragging
+    /// the row moves only the copy on screen, and the next tab brings forward a copy still
+    /// sitting where it was last left. The row appears to jump, and no amount of care
+    /// about *where to scroll to* helps, because the scroll views are different.
+    ///
+    /// So the offset lives with the scope, and each bar takes it on when it comes forward.
+    /// Deliberately not `@Published`: this is where the row is, not something the bar is
+    /// drawn from, and republishing it on every scrolled pixel would redraw fourteen bars.
+    var rowOffset: CGFloat = 0
+
+    /// The one thing the bar should be showing.
+    ///
+    /// A fact about the scope, not about any window's view of it, which is why it lives
+    /// here: the bar of a tab that isn't selected is inside a window that is ordered out,
+    /// and SwiftUI stops updating the views in one of those. A copy of this held in view
+    /// state would be as stale as the view, and stale is exactly what it must not be at
+    /// the moment a window comes forward and asks where to stand.
+    ///
+    /// Read off the active section rather than off the selected tab. The two usually agree
+    /// — the active group is derived from the focused tab — but a group held open with
+    /// nothing in it is the exception, and there the selected tab is in some *other*
+    /// group. Scrolling to it would take the row away from the group the user just went
+    /// to, so the empty group's header stands in.
+    var scrollTarget: TabBarScrollTarget? {
+        guard let active = sections.first(where: \.isActive) else { return nil }
+        guard let tab = active.tabs.first(where: \.isSelected) ?? active.tabs.first else {
+            return .section(active.id)
+        }
+        return .tab(tab.id)
+    }
+
     private weak var observedTabGroup: NSWindowTabGroup?
     private var windowsObservation: NSKeyValueObservation?
     private var tokens: [NSObjectProtocol] = []
@@ -123,6 +162,30 @@ class CustomTabBarModel: ObservableObject {
                 self?.setNeedsRefresh()
             })
         }
+
+        // Filtered, unlike the rest. Every command that starts or ends anywhere in the
+        // app posts this, and redrawing a bar walks the surfaces of every tab it holds
+        // to see which are working — so an unfiltered one would have each window's bar
+        // recount itself every time a command ran in any other.
+        //
+        // Asked of the trees the bar reads, not of the surface's window: a zoomed split
+        // takes its siblings out of the view hierarchy, so their window is nil while
+        // their state still counts.
+        tokens.append(center.addObserver(
+            forName: .ghosttyCommandRunningDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else { return }
+            guard let surface = notification.object as? Ghostty.SurfaceView else { return }
+            guard self.members.contains(where: { window in
+                guard let controller = window.windowController as? BaseTerminalController
+                else { return false }
+                return controller.surfaceTree.contains { $0 === surface }
+            }) else { return }
+
+            self.setNeedsRefresh()
+        })
     }
 
     deinit {
@@ -185,7 +248,8 @@ class CustomTabBarModel: ObservableObject {
                 title: w.title.isEmpty ? "Terminal" : w.title,
                 color: (w as? TerminalWindow)?.tabColor ?? .none,
                 groupID: (w as? CustomTabsTerminalWindow)?.customTabGroupID,
-                isSelected: w === selected)
+                isSelected: w === selected,
+                isBusy: isRunningCommand(w))
         }
 
         if next != tabs { tabs = next }
@@ -231,6 +295,18 @@ class CustomTabBarModel: ObservableObject {
         if let pending = registry.pendingActive { return pending.groupID }
         guard let selected = reference?.tabGroup?.selectedWindow ?? reference else { return nil }
         return groupID(of: selected)
+    }
+
+    /// Whether a tab has a command running in it.
+    ///
+    /// A tab is a window and a window holds a tree of surfaces, so the tab is working if
+    /// any one of them is. The state itself comes from shell integration, which means a
+    /// shell without it simply never reads as working.
+    private func isRunningCommand(_ window: NSWindow) -> Bool {
+        guard let controller = window.windowController as? BaseTerminalController else {
+            return false
+        }
+        return controller.surfaceTree.contains { $0.commandRunning }
     }
 
     private func groupID(of window: NSWindow) -> UUID? {
@@ -495,7 +571,7 @@ class CustomTabBarModel: ObservableObject {
 
         let wasSelected = tabGroup.selectedWindow === moved
 
-        CustomTabsTerminalWindow.withTabGroupHeld {
+        CustomTabsTerminalWindow.withTabReorder(moved) {
             NSAnimationContext.beginGrouping()
             NSAnimationContext.current.duration = 0
             tabGroup.removeWindow(moved)
@@ -535,7 +611,7 @@ class CustomTabBarModel: ObservableObject {
 
         let wasSelected = tabGroup.selectedWindow === moved
 
-        CustomTabsTerminalWindow.withTabGroupHeld {
+        CustomTabsTerminalWindow.withTabReorder(moved) {
             NSAnimationContext.beginGrouping()
             NSAnimationContext.current.duration = 0
             tabGroup.removeWindow(moved)
@@ -555,4 +631,17 @@ class CustomTabBarModel: ObservableObject {
         let windows = reference?.tabGroup?.windows ?? [reference].compactMap { $0 }
         return windows.first { ObjectIdentifier($0) == id }
     }
+}
+
+// MARK: - Notifications
+
+extension Notification.Name {
+    /// Posted on a surface view when its shell started or finished a command.
+    ///
+    /// Declared here rather than beside the other Ghostty notifications, even though
+    /// `Ghostty.App` is what posts it: this is the only thing in the fork that reads it,
+    /// and a name is something a file can carry on its own. The list upstream keeps is a
+    /// file the fork would otherwise have to hold a line in forever.
+    static let ghosttyCommandRunningDidChange = Notification.Name(
+        "com.mitchellh.ghostty.ghosttyCommandRunningDidChange")
 }

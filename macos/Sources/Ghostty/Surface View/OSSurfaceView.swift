@@ -3,7 +3,7 @@ import GhosttyKit
 import SwiftUI
 
 extension Ghostty {
-    class OSSurfaceView: OSView, ObservableObject {
+    class OSSurfaceView: NSView, ObservableObject {
         typealias ID = UUID
 
         /// Unique ID per surface
@@ -31,6 +31,11 @@ extension Ghostty {
 
         // The progress report (if any)
         @Published var progressReport: Action.ProgressReport?
+
+        // True while the shell is running a command rather than sitting at its
+        // prompt. Shell integration reports both ends of this, so a surface
+        // without it never reads as running.
+        @Published var commandRunning: Bool = false
 
         // The currently active key tables. Empty if no tables are active.
         @Published var keyTables: [String] = []
@@ -129,7 +134,7 @@ extension Ghostty.OSSurfaceView {
         /// The pasteboard used to persist the search needle.
         ///
         /// The `.find` pasteboard lets us sync our needle across the system and other find bars.
-        private let pasteboard: OSPasteboard
+        private let pasteboard: NSPasteboard
 
         @Published var needle = Needle.empty
 
@@ -138,7 +143,7 @@ extension Ghostty.OSSurfaceView {
 
         init(
             from startSearch: Ghostty.Action.StartSearch,
-            pasteboard: OSPasteboard = OSPasteboard.find
+            pasteboard: NSPasteboard = NSPasteboard.find
         ) {
             self.pasteboard = pasteboard
             if let needle = startSearch.needle, !needle.isEmpty {
@@ -173,9 +178,7 @@ extension Ghostty.OSSurfaceView {
         guard let surface = self.surface else { return false }
         let action = "navigate_search:next"
         if !ghostty_surface_binding_action(surface, action, UInt(action.lengthOfBytes(using: .utf8))) {
-#if canImport(AppKit)
             AppDelegate.logger.warning("action failed action=\(action, privacy: .public)")
-#endif
             return false
         }
         return true
@@ -185,9 +188,7 @@ extension Ghostty.OSSurfaceView {
         guard let surface = self.surface else { return false }
         let action = "navigate_search:previous"
         if !ghostty_surface_binding_action(surface, action, UInt(action.lengthOfBytes(using: .utf8))) {
-#if canImport(AppKit)
             AppDelegate.logger.warning("action failed action=\(action, privacy: .public)")
-#endif
             return false
         }
         return true

@@ -354,6 +354,21 @@ pub const Action = union(Key) {
     /// Move a tab to a new window.
     move_tab_to_new_window,
 
+    /// The shell started running a command, and is no longer at its prompt.
+    /// Shell integration only — without it this is never sent, so a surface
+    /// simply never reports as working.
+    ///
+    /// A state, not an event: `command_finished` reports one command with its
+    /// exit code and duration, which is a different question and answered
+    /// separately. These two say only whether the shell is busy, and the pair
+    /// closes on either a command reporting that it finished or a prompt being
+    /// drawn — nested shells send both their markers down one stream, and a
+    /// prompt is a prompt whichever of them drew it.
+    command_started,
+
+    /// The shell is at a prompt and running nothing.
+    command_ended,
+
     /// Sync with: ghostty_action_tag_e
     pub const Key = enum(c_int) {
         quit,
@@ -424,6 +439,8 @@ pub const Action = union(Key) {
         readonly,
         copy_title_to_clipboard,
         move_tab_to_new_window,
+        command_started,
+        command_ended,
 
         test "ghostty.h Action.Key" {
             try lib.checkGhosttyHEnum(Key, "GHOSTTY_ACTION_");

@@ -187,6 +187,10 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
         // its own.
         child.setTabScope(tabScopeID)
 
+        // A move is not an arrival. The tab already has the group it should keep, and
+        // for an ungrouped one there is nothing below to tell the two cases apart.
+        guard !Self.isReordering(child) else { return }
+
         // Only fill in a group that isn't already set, so moving an existing tab in
         // here doesn't reassign it.
         guard child.customTabGroupID == nil else { return }
@@ -217,22 +221,68 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
     static var isInsertingTab: Bool { insertionDepth > 0 }
     private static var insertionDepth = 0
 
-    /// Run a change to the tab group with the bar held still until it's done.
+    /// The tab being moved within its tab group right now, if any.
+    ///
+    /// The add half of a move lands in `addTabbedWindow` looking exactly like a new tab
+    /// arriving, and for an ungrouped tab there is nothing there to tell the two apart:
+    /// `customTabGroupID == nil` means both "not assigned yet" and "deliberately in no
+    /// group". So the re-add handed the tab whichever group the selection had drifted to
+    /// while it was out of the group — which is what moving a selected ungrouped tab did.
+    ///
+    /// Names the window rather than counting moves. AppKit turns the runloop during an
+    /// insert, so a real tab opening elsewhere can land inside the pair; against a
+    /// count, that tab would be taken for the one being moved and open with no group at
+    /// all — a silent, permanent loss, since nothing later puts it right.
+    private static var reorderingWindow: ObjectIdentifier?
+
+    static func isReordering(_ window: NSWindow) -> Bool {
+        reorderingWindow == ObjectIdentifier(window)
+    }
+
+    /// Mark the start of a move of one tab within its tab group.
     ///
     /// Reordering is a remove followed by an add, and in between the tab is in no tab
     /// group at all. A snapshot from that gap is missing it, so everything to its right
     /// slides over by its width and back again — worst at the far end of the bar, where
-    /// the shift is the whole width of the tab.
-    static func withTabGroupHeld<T>(_ body: () -> T) -> T {
+    /// the shift is the whole width of the tab. The bar is held still for the pair, and
+    /// the add is marked as the move it is rather than an arrival.
+    ///
+    /// Handed back as a token to end rather than taking the move as a closure, so that
+    /// a call site can mark an existing block with `defer` instead of being wrapped in
+    /// one. `withTabReorder` is the same thing where a closure reads better.
+    static func beginTabReorder(_ window: NSWindow) -> TabReorder {
         insertionDepth += 1
-        defer { insertionDepth -= 1 }
+        let previous = reorderingWindow
+        reorderingWindow = ObjectIdentifier(window)
+        return TabReorder(previous: previous)
+    }
+
+    /// The end of a move, held so it can be given back.
+    struct TabReorder {
+        fileprivate let previous: ObjectIdentifier?
+
+        func end() {
+            insertionDepth -= 1
+            reorderingWindow = previous
+        }
+    }
+
+    /// Run a move of one tab within its tab group.
+    static func withTabReorder<T>(_ window: NSWindow, _ body: () -> T) -> T {
+        let reorder = beginTabReorder(window)
+        defer { reorder.end() }
         return body()
     }
 
-    /// Tabs the user can actually see right now: the ones in the active group.
+    /// The tabs a tab action applies to: the ones in the group being worked in.
+    ///
+    /// Every group shows its tabs, so this is no longer "what is on screen" — it is the
+    /// group the focused tab is in, and the point of it is that tab actions stay inside
+    /// that group. Go to tab 3 means the third of these, closing the others leaves the
+    /// other groups alone, and a move can't slide a tab out of the group it belongs to.
     ///
     /// Read off the bar's model rather than worked out again here. "Which group is
-    /// showing" and "which group ids this scope still defines" are the model's to
+    /// active" and "which group ids this scope still defines" are the model's to
     /// answer; a second copy of that reasoning drifted from it, and a tab pointing at a
     /// group the scope no longer defines was drawn in the default section while counting
     /// as a scope of one for every action.
@@ -335,8 +385,8 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
 extension NSWindow {
     /// The tabs a *tab-level* action on this window applies to.
     ///
-    /// This is the whole tab group everywhere except the custom titlebar style, where
-    /// only the active group's tabs are on screen. Anything that counts, indexes or
+    /// This is the whole tab group everywhere except the custom titlebar style, where it
+    /// is the group being worked in. Anything that counts, indexes or
     /// sweeps tabs as tabs — go to tab N, move tab, close the others, close the ones to
     /// the right, and the menu validation that decides whether those are available —
     /// reads the set through here, so it acts on the set the user can see.
@@ -347,9 +397,9 @@ extension NSWindow {
     ///
     /// One entry point rather than a substitution at each call site: the two are
     /// interchangeable under the stock styles, so a call site that keeps reading
-    /// `tabGroup.windows` looks correct and stays correct until someone collapses a
-    /// group. "Close Other Tabs" reaching into a collapsed group and killing terminals
-    /// the user couldn't see was exactly that.
+    /// `tabGroup.windows` looks correct and stays correct until someone makes a group.
+    /// "Close Other Tabs" reaching across groups and closing terminals the user wasn't
+    /// acting on was exactly that.
     ///
     /// Falls back to `[self]` for a lone window so callers get the same "just me" answer
     /// whether or not a tab group exists.
