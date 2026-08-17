@@ -174,6 +174,16 @@ readonly: bool = false,
 /// the wall clock time that has elapsed between timestamps.
 command_timer: ?std.Io.Timestamp = null,
 
+/// Whether the shell is running a command rather than sitting at its prompt.
+///
+/// Held here so the apprt is told when it changes and not every time a marker
+/// arrives. Shells print the prompt markers as part of the prompt itself, so they
+/// come again on every redraw — a window resize, a background job reporting — and an
+/// apprt that had to sort the repeats out for itself would be a rule each of them
+/// reinvents, over messages that reach it through a mailbox the IO thread blocks on
+/// when it fills.
+command_running: bool = false,
+
 /// Search state
 search: ?Search = null,
 
@@ -1138,11 +1148,35 @@ pub fn handleMessage(self: *Surface, msg: Message) !void {
             try self.selectionScrollTick();
         },
 
-        .start_command => {
+        .start_command => command: {
             self.command_timer = .now(global.io(), .awake);
+
+            if (self.command_running) break :command;
+            self.command_running = true;
+
+            // Separate from the timer on purpose. The timer measures one command so it
+            // can be reported when it ends; this says the shell is working, which is a
+            // state and not an event. Nested shell integration — ssh to a host whose
+            // shell also reports — sends markers for both shells down one stream, and no
+            // amount of counting them tells the two apart. Saying "working" on a command
+            // and "idle" on a prompt needs no such telling: whichever shell drew the
+            // prompt, a prompt is what the user is looking at.
+            _ = self.rt_app.performAction(
+                .{ .surface = self },
+                .command_started,
+                {},
+            ) catch |err| {
+                log.warn("apprt failed to notify command start={}", .{err});
+            };
+        },
+
+        .prompt_ready => {
+            self.notifyCommandEnded();
         },
 
         .stop_command => |v| timer: {
+            self.notifyCommandEnded();
+
             const end: std.Io.Timestamp = .now(global.io(), .awake);
             const start = self.command_timer orelse break :timer;
             self.command_timer = null;
@@ -1244,6 +1278,12 @@ fn selectionScrollTick(self: *Surface) !void {
 fn childExited(self: *Surface, info: apprt.surface.Message.ChildExited) void {
     // Mark our flag that we exited immediately
     self.child_exited = true;
+
+    // The shell is gone, so nothing of its is running. Shell integration reports the
+    // end of a command, not the end of the shell, so this is the only place that can
+    // say so — and it is said here rather than left to each apprt to work out, since
+    // whether the shell is working is this surface's answer to give.
+    self.notifyCommandEnded();
 
     // If our runtime was below some threshold then we assume that this
     // was an abnormal exit and we show an error message.
@@ -1844,6 +1884,32 @@ const InitialSizeError = error{
     ContentScaleUnavailable,
     AppActionFailed,
 };
+
+/// Say the shell isn't working any more.
+///
+/// Sent from both ends that mean it — a command reporting that it finished, and a
+/// prompt being drawn — because either is enough on its own. A prompt is what makes
+/// this survive the markers going astray: a connection dropped mid-command, a shell
+/// replaced by `exec`, a shell that reports starts but not ends. The state is wrong
+/// until the next prompt and right from then on, instead of wrong for good.
+///
+/// The command timer is deliberately left alone. It measures one command so that
+/// upstream can report how long it took when it ends, which is a different question
+/// from whether the shell is free right now — a prompt inside an ssh session answers
+/// the second and says nothing about the first. Clearing it here would silence the
+/// notification for the very commands worth notifying about.
+fn notifyCommandEnded(self: *Surface) void {
+    if (!self.command_running) return;
+    self.command_running = false;
+
+    _ = self.rt_app.performAction(
+        .{ .surface = self },
+        .command_ended,
+        {},
+    ) catch |err| {
+        log.warn("apprt failed to notify command end={}", .{err});
+    };
+}
 
 /// Recalculate the initial size of the window based on the
 /// configuration and invoke the apprt `initial_size` action if

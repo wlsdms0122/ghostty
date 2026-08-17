@@ -51,6 +51,19 @@ pub const StreamHandler = struct {
     /// The clipboard write access configuration.
     clipboard_write: configpkg.ClipboardAccess,
 
+    /// Whether a command has started and not yet been reported as over.
+    ///
+    /// Shells print the prompt markers as part of the prompt itself, so they arrive
+    /// again on every redraw — a resize, a vi-mode change, a background job reporting.
+    /// Kept on this side so a redrawn prompt costs nothing rather than a message
+    /// through a mailbox the IO thread blocks on when it fills.
+    ///
+    /// A note of what has been sent, not the answer itself — the surface holds that,
+    /// and clears it on paths this side never sees, such as the child exiting. Being
+    /// only a note, the cost of it being wrong is one message too few, which is why a
+    /// reset clears it too: better to say the same thing twice than to owe it.
+    command_running: bool = false,
+
     //---------------------------------------------------------------
     // Internal state
 
@@ -872,6 +885,15 @@ pub const StreamHandler = struct {
 
         // Clear the progress bar
         self.progressReport(.{ .state = .remove });
+
+        // And close out a command in flight. Clearing the note alone would be forgetting
+        // the debt rather than paying it: the surface was told a command started and
+        // would never be told otherwise, since the next prompt only speaks when the note
+        // says something is owed.
+        if (self.command_running) {
+            self.command_running = false;
+            self.surfaceMessageWriter(.prompt_ready);
+        }
     }
 
     pub fn queryKittyKeyboard(self: *StreamHandler) !void {
@@ -994,6 +1016,10 @@ pub const StreamHandler = struct {
     ) !void {
         switch (cmd.action) {
             .end_input_start_output => {
+                // Sent every time, unlike the prompt below: each one is a command
+                // starting, and the timer it sets is what reports how long that command
+                // took.
+                self.command_running = true;
                 self.surfaceMessageWriter(.start_command);
             },
 
@@ -1006,16 +1032,27 @@ pub const StreamHandler = struct {
                     break :code std.math.cast(u8, raw) orelse 1;
                 };
 
+                self.command_running = false;
                 self.surfaceMessageWriter(.{ .stop_command = code });
+            },
+
+            // A prompt is the shell telling us it isn't running anything, which is the
+            // only chance to notice that a command's end marker never arrived. Sent
+            // once for each return to the prompt, not once per redraw of it.
+            .fresh_line_new_prompt,
+            .new_command,
+            .prompt_start,
+            => {
+                if (self.command_running) {
+                    self.command_running = false;
+                    self.surfaceMessageWriter(.prompt_ready);
+                }
             },
 
             // Handled by Terminal, no special handling by us
             .end_prompt_start_input,
             .end_prompt_start_input_terminate_eol,
             .fresh_line,
-            .fresh_line_new_prompt,
-            .new_command,
-            .prompt_start,
             => {},
         }
 

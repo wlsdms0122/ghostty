@@ -762,17 +762,26 @@ private struct CustomTabView: View {
                 .truncationMode(.tail)
                 .font(.system(size: 12))
 
-            // The close button always holds its place and only fades in on hover, so
-            // hovering doesn't resize the tab and shove its neighbors around.
+            // One slot for two things that are never wanted at once: the close button
+            // while the pointer is here, and otherwise a pulse while the shell is
+            // working. The slot always holds its place, so neither hovering a tab nor a
+            // command starting in it resizes the tab and shoves its neighbours around.
             Button {
                 model.close(tab.id)
             } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .bold))
+                ZStack {
+                    if tab.isBusy {
+                        BusyIndicator()
+                            .opacity(isHovering ? 0 : 1)
+                    }
+
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .opacity(isHovering ? 1 : 0)
+                }
             }
             .buttonStyle(.plain)
             .frame(width: 12)
-            .opacity(isHovering ? 1 : 0)
             .allowsHitTesting(isHovering)
         }
         .padding(.leading, 10)
@@ -819,6 +828,25 @@ private struct CustomTabView: View {
     private var border: Color {
         guard tab.isSelected, tab.color != .none else { return .clear }
         return tint.opacity(0.9)
+    }
+}
+
+/// A dot that breathes while a tab's shell is working.
+///
+/// Its own view so the repeating animation belongs to something that exists only while
+/// the shell is busy. Driven from `onAppear` rather than from the busy flag: the flag
+/// changes in the same snapshot as everything else the bar redraws, and an animation
+/// started from there is swept up by the bar's own — the dot ends up following the
+/// spring the tabs move on instead of pulsing.
+private struct BusyIndicator: View {
+    @State private var dim = false
+
+    var body: some View {
+        Circle()
+            .frame(width: 5, height: 5)
+            .opacity(dim ? 0.25 : 1)
+            .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true), value: dim)
+            .onAppear { dim = true }
     }
 }
 

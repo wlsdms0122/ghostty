@@ -626,6 +626,12 @@ extension Ghostty {
             case GHOSTTY_ACTION_SEARCH_SELECTED:
                 searchSelected(app, target: target, v: action.action.search_selected)
 
+            case GHOSTTY_ACTION_COMMAND_STARTED:
+                setCommandRunning(target, true)
+
+            case GHOSTTY_ACTION_COMMAND_ENDED:
+                setCommandRunning(target, false)
+
             case GHOSTTY_ACTION_COMMAND_FINISHED:
                 commandFinished(app, target: target, v: action.action.command_finished)
 
@@ -1459,6 +1465,36 @@ extension Ghostty {
                     requireFocus: requireFocus
                 )
             }
+        }
+
+        /// Record whether the surface's shell is running a command, and say so app-wide.
+        ///
+        /// The published property serves anything observing the surface itself. The
+        /// notification serves the views that only know the *window* — a tab bar draws a
+        /// row of them and has no surface to observe.
+        private static func setCommandRunning(_ target: ghostty_target_s, _ running: Bool) {
+            switch target.tag {
+            case GHOSTTY_TARGET_APP:
+                Ghostty.logger.warning("command state does nothing with an app target")
+                return
+
+            case GHOSTTY_TARGET_SURFACE:
+                guard let surface = target.target.surface else { return }
+                guard let surfaceView = self.surfaceView(from: surface) else { return }
+                setCommandRunning(surfaceView, running)
+
+            default:
+                assertionFailure()
+            }
+        }
+
+        private static func setCommandRunning(_ surfaceView: SurfaceView, _ running: Bool) {
+            guard surfaceView.commandRunning != running else { return }
+            surfaceView.commandRunning = running
+            NotificationCenter.default.post(
+                name: .ghosttyCommandRunningDidChange,
+                object: surfaceView
+            )
         }
 
         private static func commandFinished(

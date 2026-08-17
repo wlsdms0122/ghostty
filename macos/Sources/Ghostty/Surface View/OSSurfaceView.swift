@@ -32,6 +32,11 @@ extension Ghostty {
         // The progress report (if any)
         @Published var progressReport: Action.ProgressReport?
 
+        // True while the shell is running a command rather than sitting at its
+        // prompt. Shell integration reports both ends of this, so a surface
+        // without it never reads as running.
+        @Published var commandRunning: Bool = false
+
         // The currently active key tables. Empty if no tables are active.
         @Published var keyTables: [String] = []
 

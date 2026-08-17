@@ -99,6 +99,12 @@ pub const Message = union(enum) {
     /// of the command.
     stop_command: ?u8,
 
+    /// The shell has drawn a prompt, which means nothing is running in it.
+    ///
+    /// See the `command_started` action for why a prompt, and not only a command
+    /// reporting that it finished, is what says the shell is idle.
+    prompt_ready,
+
     /// The scrollbar state changed for the surface.
     scrollbar: terminal.Scrollbar,
 
