@@ -503,6 +503,27 @@ class CustomTabBarModel: ObservableObject {
         selectGroup(sections[next].group?.id)
     }
 
+    /// Move to a section by its position in the bar, counting the default section as
+    /// the first one. Out of range does nothing.
+    ///
+    /// Positions rather than group indices: the number the user presses is the one they
+    /// can count off the bar, and the default section is a place tabs actually live.
+    func selectSection(at index: Int) {
+        // Same reason as `cycleGroup`: this runs from a key handler.
+        refresh()
+
+        guard sections.indices.contains(index) else { return }
+        selectGroup(sections[index].group?.id)
+    }
+
+    /// Move to the last section in the bar.
+    func selectLastSection() {
+        refresh()
+
+        guard let last = sections.last else { return }
+        selectGroup(last.group?.id)
+    }
+
     /// Rename a group. The sheet itself is `CustomTabRenamePrompt`'s — the model owns
     /// what a rename *is*, not what asking for one looks like.
     func promptRenameGroup(_ groupID: UUID) {

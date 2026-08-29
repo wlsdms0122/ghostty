@@ -336,6 +336,17 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
             case "[":
                 tabBarModel.cycleGroup(by: -1)
                 return true
+            // ⌃⌘1…8 mirror ⌘1…8 one level up: what those do among the tabs of a
+            // group, these do among the sections of the bar. ⌘9 is "last tab", so
+            // ⌃⌘9 is the last section rather than the ninth.
+            case "1", "2", "3", "4", "5", "6", "7", "8":
+                guard let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) })
+                else { break }
+                tabBarModel.selectSection(at: digit - 1)
+                return true
+            case "9":
+                tabBarModel.selectLastSection()
+                return true
             default:
                 break
             }
