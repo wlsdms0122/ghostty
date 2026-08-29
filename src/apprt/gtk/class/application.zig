@@ -12,6 +12,7 @@ const gtk = @import("gtk");
 
 const build_config = @import("../../../build_config.zig");
 const build_info = @import("../build/info.zig");
+const cli = @import("../../../cli.zig");
 const global = @import("../../../global.zig");
 const i18n = @import("../../../os/main.zig").i18n;
 const apprt = @import("../../../apprt.zig");
@@ -769,6 +770,7 @@ pub const Application = extern struct {
 
             .set_title => Action.setTitle(target, value),
             .set_tab_title => return Action.setTabTitle(target, value),
+            .set_window_title => return Action.setWindowTitle(target, value),
 
             .show_child_exited => return Action.showChildExited(target, value),
 
@@ -1859,6 +1861,7 @@ pub const Application = extern struct {
             null,
             if (overrides) |o| .{
                 .command = o.command,
+                .shell_integration = o.shell_integration,
                 .working_directory = o.working_directory,
                 .title = o.title,
             } else .none,
@@ -1939,6 +1942,7 @@ pub const Application = extern struct {
                 },
                 .{
                     .command = overrides.command,
+                    .shell_integration = overrides.shell_integration,
                     .working_directory = overrides.working_directory,
                     .title = overrides.title,
                 },
@@ -1951,6 +1955,7 @@ pub const Application = extern struct {
                 null,
                 .{
                     .command = overrides.command,
+                    .shell_integration = overrides.shell_integration,
                     .working_directory = overrides.working_directory,
                     .title = overrides.title,
                 },
@@ -1962,6 +1967,7 @@ pub const Application = extern struct {
 
     fn parseOverrides(arena_alloc: Allocator, arguments_it: *glib.VariantIter) (Allocator.Error || error{ValueRequired})!struct {
         command: ?configpkg.Command = null,
+        shell_integration: ?configpkg.Config.ShellIntegration = null,
         working_directory: ?[:0]const u8 = null,
         title: ?[:0]const u8 = null,
     } {
@@ -1970,6 +1976,9 @@ pub const Application = extern struct {
         var working_directory: ?[:0]const u8 = null;
         var title: ?[:0]const u8 = null;
         var command: ?configpkg.Command = null;
+        var parsed_shell_integration: struct {
+            @"shell-integration": ?configpkg.Config.ShellIntegration = null,
+        } = .{};
 
         const s_variant_type = glib.VariantType.new("s");
         defer s_variant_type.free();
@@ -2015,6 +2024,19 @@ pub const Application = extern struct {
                 command = cmd;
                 continue;
             }
+            if (std.mem.cutPrefix(u8, str, "--shell-integration=")) |v| {
+                cli.args.parseIntoField(
+                    @TypeOf(parsed_shell_integration),
+                    arena_alloc,
+                    &parsed_shell_integration,
+                    "shell-integration",
+                    std.mem.trim(u8, v, &std.ascii.whitespace),
+                ) catch |err| {
+                    log.warn("unable to parse shell integration {s}: {t}", .{ v, err });
+                    continue;
+                };
+                continue;
+            }
             if (std.mem.cutPrefix(u8, str, "--working-directory=")) |v| {
                 working_directory = arena_alloc.dupeZ(u8, std.mem.trim(u8, v, &std.ascii.whitespace)) catch |err| {
                     log.warn("unable to duplicate working directory: {t}", .{err});
@@ -2039,6 +2061,7 @@ pub const Application = extern struct {
 
         return .{
             .command = command,
+            .shell_integration = parsed_shell_integration.@"shell-integration",
             .working_directory = working_directory,
             .title = title,
         };
@@ -2640,6 +2663,7 @@ const Action = struct {
         target: apprt.Target,
         overrides: struct {
             command: ?configpkg.Command = null,
+            shell_integration: ?configpkg.Config.ShellIntegration = null,
             working_directory: ?[:0]const u8 = null,
             title: ?[:0]const u8 = null,
 
@@ -2666,6 +2690,7 @@ const Action = struct {
                 };
                 window.newTab(core, .{
                     .command = overrides.command,
+                    .shell_integration = overrides.shell_integration,
                     .working_directory = overrides.working_directory,
                     .title = overrides.title,
                 });
@@ -2679,6 +2704,7 @@ const Action = struct {
         parent: ?*CoreSurface,
         overrides: struct {
             command: ?configpkg.Command = null,
+            shell_integration: ?configpkg.Config.ShellIntegration = null,
             working_directory: ?[:0]const u8 = null,
             title: ?[:0]const u8 = null,
 
@@ -2701,6 +2727,7 @@ const Action = struct {
             parent,
             .{
                 .command = overrides.command,
+                .shell_integration = overrides.shell_integration,
                 .working_directory = overrides.working_directory,
                 .title = overrides.title,
             },
@@ -2713,6 +2740,7 @@ const Action = struct {
         parent: ?*CoreSurface,
         overrides: struct {
             command: ?configpkg.Command = null,
+            shell_integration: ?configpkg.Config.ShellIntegration = null,
             working_directory: ?[:0]const u8 = null,
             title: ?[:0]const u8 = null,
 
@@ -2733,6 +2761,7 @@ const Action = struct {
         // Create a new tab with window context (first tab in new window)
         win.newTabForWindow(parent, .{
             .command = overrides.command,
+            .shell_integration = overrides.shell_integration,
             .working_directory = overrides.working_directory,
             .title = overrides.title,
         });
@@ -2892,6 +2921,23 @@ const Action = struct {
                             return false;
                         };
                         tab.promptTabTitle();
+                        return true;
+                    },
+                }
+            },
+            .window => {
+                switch (target) {
+                    .app => return false,
+                    .surface => |v| {
+                        const surface = v.rt_surface.surface;
+                        const win = ext.getAncestor(
+                            Window,
+                            surface.as(gtk.Widget),
+                        ) orelse {
+                            log.warn("surface is not in a window, ignoring prompt_window_title", .{});
+                            return false;
+                        };
+                        win.promptWindowTitle();
                         return true;
                     },
                 }
@@ -3062,6 +3108,30 @@ const Action = struct {
                     return false;
                 };
                 tab.setTitleOverride(if (value.title.len == 0) null else value.title);
+                return true;
+            },
+        }
+    }
+
+    pub fn setWindowTitle(
+        target: apprt.Target,
+        value: apprt.action.SetTitle,
+    ) bool {
+        switch (target) {
+            .app => {
+                log.warn("set_tab_title to app is unexpected", .{});
+                return false;
+            },
+            .surface => |core| {
+                const surface = core.rt_surface.surface;
+                const window = ext.getAncestor(
+                    Window,
+                    surface.as(gtk.Widget),
+                ) orelse {
+                    log.warn("surface is not in a window, ignoring set_window_title", .{});
+                    return false;
+                };
+                window.setTitleOverride(if (value.title.len == 0) null else value.title);
                 return true;
             },
         }
