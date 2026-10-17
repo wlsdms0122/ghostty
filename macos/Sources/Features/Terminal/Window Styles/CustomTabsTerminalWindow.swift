@@ -323,13 +323,13 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        // Group switching. Ghostty's own keybinds are defined in the Zig core and
-        // routed through its action system; adding one there would mean changing the
-        // core, the C API and the Swift bridge for a macOS-only feature. Handling it
-        // at the window keeps the whole feature on our side of the fence.
+        // Group switching and creation. Ghostty's own keybinds are defined in the Zig
+        // core and routed through its action system; adding one there would mean
+        // changing the core, the C API and the Swift bridge for a macOS-only feature.
+        // Handling it at the window keeps the whole feature on our side of the fence.
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if flags == [.command, .control] {
-            switch event.charactersIgnoringModifiers {
+            switch event.shortcutCharacters {
             case "]":
                 tabBarModel.cycleGroup(by: 1)
                 return true
@@ -340,12 +340,21 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
             // group, these do among the sections of the bar. ⌘9 is "last tab", so
             // ⌃⌘9 is the last section rather than the ninth.
             case "1", "2", "3", "4", "5", "6", "7", "8":
-                guard let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) })
+                guard let digit = event.shortcutCharacters.flatMap({ Int($0) })
                 else { break }
                 tabBarModel.selectSection(at: digit - 1)
                 return true
             case "9":
                 tabBarModel.selectLastSection()
+                return true
+            // ⌃⌘T is ⌘T one level up, like the digits: a new group, as the bar's "+"
+            // makes it.
+            case "t":
+                tabBarModel.createEmptyGroup()
+                return true
+            // ⌃⌘W closes the group on screen, as ⌘W closes the tab.
+            case "w":
+                tabBarModel.closeActiveGroup()
                 return true
             default:
                 break
