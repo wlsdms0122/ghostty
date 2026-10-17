@@ -72,13 +72,6 @@ class CustomTabGroupRegistry {
     /// Same memory, for the default (ungrouped) section.
     private var defaultLastSelected: ObjectIdentifier?
 
-    /// The group each closed tab was in, keyed by the tab's surfaces. Undo brings a tab
-    /// back with the same surfaces, which is how it can be told apart from a new one.
-    ///
-    /// Weak keys: undo holds a closed tab's surfaces until it expires, and the entry
-    /// goes when they do.
-    private let closedTabGroups = NSMapTable<Ghostty.SurfaceView, NSUUID>.weakToStrongObjects()
-
     /// Removed groups and where they sat in the bar, so a tab that undo brings back can
     /// bring its group back too. Closing a group removes it along with its tabs.
     private var removedGroups: [UUID: (group: CustomTabGroup, index: Int)] = [:]
@@ -183,22 +176,11 @@ class CustomTabGroupRegistry {
         notify()
     }
 
-    // MARK: Closed Tabs
+    // MARK: Removed Groups
 
-    func recordClosedTab(_ surfaces: [Ghostty.SurfaceView], in id: UUID) {
-        for surface in surfaces {
-            closedTabGroups.setObject(id as NSUUID, forKey: surface)
-        }
-    }
-
-    /// The group a tab was in when it closed, if undo is bringing it back. A group that
-    /// was removed since comes back to where it sat.
-    func groupOfClosedTab(_ surfaces: [Ghostty.SurfaceView]) -> UUID? {
-        guard let id = surfaces.lazy
-            .compactMap({ self.closedTabGroups.object(forKey: $0) as UUID? })
-            .first
-        else { return nil }
-
+    /// A group a returning tab was in: the id if the group is here, after bringing it
+    /// back to where it sat if it was removed since, or nil if it's gone for good.
+    func restoreGroup(_ id: UUID) -> UUID? {
         if groups[id] == nil, let removed = removedGroups.removeValue(forKey: id) {
             groups[id] = removed.group
             groupOrder.insert(id, at: min(removed.index, groupOrder.count))

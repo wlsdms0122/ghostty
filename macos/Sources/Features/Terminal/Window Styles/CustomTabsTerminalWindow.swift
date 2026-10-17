@@ -195,14 +195,22 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
         // here doesn't reassign it.
         guard child.customTabGroupID == nil else { return }
 
-        // A tab that undo brought back returns to the group it closed from.
-        child.customTabGroupID = groupRegistry.groupOfClosedTab(child.surfaces) ?? destination
+        // A tab that undo brought back returns to the group it closed from, under the
+        // title it had.
+        guard let closed = CustomTabClosedTab.returning(child.surfaces) else {
+            child.customTabGroupID = destination
+            return
+        }
+
+        child.customTabGroupID = closed.groupID.flatMap(groupRegistry.restoreGroup)
+        (child.windowController as? BaseTerminalController)?.titleOverride = closed.titleOverride
     }
 
     override func close() {
-        if let customTabGroupID {
-            groupRegistry.recordClosedTab(surfaces, in: customTabGroupID)
-        }
+        CustomTabClosedTab(
+            groupID: groupRegistry.group(customTabGroupID)?.id,
+            titleOverride: (windowController as? BaseTerminalController)?.titleOverride
+        ).record(for: surfaces)
 
         super.close()
 
