@@ -72,6 +72,10 @@ class CustomTabGroupRegistry {
     /// Same memory, for the default (ungrouped) section.
     private var defaultLastSelected: ObjectIdentifier?
 
+    /// Removed groups and where they sat in the bar, so a tab that undo brings back can
+    /// bring its group back too. Closing a group removes it along with its tabs.
+    private var removedGroups: [UUID: (group: CustomTabGroup, index: Int)] = [:]
+
     /// A group the user selected that has no tabs to focus.
     ///
     /// Normally the active group is derived from the focused tab, which can't lie. An
@@ -111,7 +115,10 @@ class CustomTabGroupRegistry {
     }
 
     func removeGroup(_ id: UUID) {
-        groups.removeValue(forKey: id)
+        if let group = groups.removeValue(forKey: id),
+           let index = groupOrder.firstIndex(of: id) {
+            removedGroups[id] = (group, index)
+        }
         groupOrder.removeAll { $0 == id }
         lastSelected.removeValue(forKey: id)
         if pendingActive?.groupID == id { pendingActive = nil }
@@ -167,6 +174,20 @@ class CustomTabGroupRegistry {
         group.color = color
         groups[id] = group
         notify()
+    }
+
+    // MARK: Removed Groups
+
+    /// A group a returning tab was in: the id if the group is here, after bringing it
+    /// back to where it sat if it was removed since, or nil if it's gone for good.
+    func restoreGroup(_ id: UUID) -> UUID? {
+        if groups[id] == nil, let removed = removedGroups.removeValue(forKey: id) {
+            groups[id] = removed.group
+            groupOrder.insert(id, at: min(removed.index, groupOrder.count))
+            notify()
+        }
+
+        return groups[id] == nil ? nil : id
     }
 
     // MARK: Selection Memory

@@ -368,6 +368,25 @@ class CustomTabBarModel: ObservableObject {
         }
     }
 
+    /// A tab that just joined, for as long as it takes to grow in.
+    ///
+    /// The bar that shows a new tab is usually new itself: every tab builds its own bar,
+    /// and the one in front after ⌘T or an undo is the new tab's. A bar that has never
+    /// drawn has no earlier frame to animate from, so the strip's insertion transition
+    /// can't run there and the tab would appear at full size. The tab grows in on its
+    /// own instead, and this says which one. Cleared afterwards, so a bar built later —
+    /// switching tabs builds one — shows the tab already in place.
+    private(set) var arrivingTabID: ObjectIdentifier?
+
+    func noteArrival(of window: NSWindow) {
+        let id = ObjectIdentifier(window)
+        arrivingTabID = id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, self.arrivingTabID == id else { return }
+            self.arrivingTabID = nil
+        }
+    }
+
     // MARK: Actions
 
     /// Select a tab. This is the same call the native tab bar makes, so everything
@@ -474,6 +493,19 @@ class CustomTabBarModel: ObservableObject {
         selectGroup(group.id)
     }
 
+    /// Open a new tab in a group. Passing nil opens it in the default section.
+    ///
+    /// The same new tab ⌘T makes, after selecting the group: a new tab joins the group
+    /// on screen, so selecting first is what puts it here. An empty group works too,
+    /// since selecting one holds it open until a tab arrives.
+    func newTab(in groupID: UUID?) {
+        selectGroup(groupID)
+
+        let window = reference?.tabGroup?.selectedWindow ?? reference
+        guard let controller = window?.windowController as? TerminalController else { return }
+        controller.newTab(nil)
+    }
+
     /// Delete a group. Its tabs fall back to the default section rather than closing —
     /// removing a label shouldn't destroy terminals.
     func deleteGroup(_ groupID: UUID) {
@@ -483,6 +515,61 @@ class CustomTabBarModel: ObservableObject {
         }
         registry.removeGroup(groupID)
         refresh()
+    }
+
+    /// Close the group on screen: every tab in it, then the group itself. The default
+    /// section isn't a group, so it has nothing to close.
+    func closeActiveGroup() {
+        // Same reason as `cycleGroup`: this runs from a key handler.
+        refresh()
+
+        guard let groupID = activeGroupID else { return }
+        closeGroup(groupID)
+    }
+
+    /// Close a group's tabs and then the group, asking once for the whole group the way
+    /// Close Other Tabs does. Undo brings the tabs back, and the group with them.
+    func closeGroup(_ groupID: UUID) {
+        let controllers = (reference?.tabGroup?.windows ?? [])
+            .filter { ($0 as? CustomTabsTerminalWindow)?.customTabGroupID == groupID }
+            .compactMap { $0.windowController as? TerminalController }
+
+        guard !controllers.isEmpty else {
+            deleteGroup(groupID)
+            return
+        }
+
+        let needsConfirm = controllers.contains { controller in
+            controller.surfaceTree.contains(where: { $0.needsConfirmQuit })
+        }
+        guard needsConfirm else {
+            closeImmediately(controllers, group: groupID)
+            return
+        }
+
+        let window = reference?.tabGroup?.selectedWindow ?? reference
+        guard let asking = window?.windowController as? BaseTerminalController else { return }
+
+        asking.confirmClose(
+            messageText: "Close Group?",
+            informativeText: "At least one tab in this group still has a running process. If you close the group the process will be killed."
+        ) { [weak self] in
+            self?.closeImmediately(controllers, group: groupID)
+        }
+    }
+
+    private func closeImmediately(_ controllers: [TerminalController], group groupID: UUID) {
+        let undoManager = controllers.first?.undoManager
+        undoManager?.beginUndoGrouping()
+
+        for controller in controllers {
+            controller.closeTabImmediately()
+        }
+
+        undoManager?.setActionName("Close Group")
+        undoManager?.endUndoGrouping()
+
+        deleteGroup(groupID)
     }
 
     /// Move to the next or previous group in bar order, wrapping around.

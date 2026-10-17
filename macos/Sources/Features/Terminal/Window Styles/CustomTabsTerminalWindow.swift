@@ -195,10 +195,25 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
         // here doesn't reassign it.
         guard child.customTabGroupID == nil else { return }
 
-        child.customTabGroupID = destination
+        tabBarModel.noteArrival(of: child)
+
+        // A tab that undo brought back returns to the group it closed from, under the
+        // title it had.
+        guard let closed = CustomTabClosedTab.returning(child.surfaces) else {
+            child.customTabGroupID = destination
+            return
+        }
+
+        child.customTabGroupID = closed.groupID.flatMap(groupRegistry.restoreGroup)
+        (child.windowController as? BaseTerminalController)?.titleOverride = closed.titleOverride
     }
 
     override func close() {
+        CustomTabClosedTab(
+            groupID: groupRegistry.group(customTabGroupID)?.id,
+            titleOverride: (windowController as? BaseTerminalController)?.titleOverride
+        ).record(for: surfaces)
+
         super.close()
 
         // After the window is really gone, so the scope it held isn't still counted as
@@ -208,6 +223,11 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
             CustomTabGroupRegistry.discardStoresWithoutWindows()
             CustomTabBarModel.discardModelsWithoutWindows()
         }
+    }
+
+    private var surfaces: [Ghostty.SurfaceView] {
+        guard let controller = windowController as? BaseTerminalController else { return [] }
+        return Array(controller.surfaceTree)
     }
 
     /// Whether a tab is being inserted into *some* tab group right now.
@@ -323,13 +343,13 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        // Group switching. Ghostty's own keybinds are defined in the Zig core and
-        // routed through its action system; adding one there would mean changing the
-        // core, the C API and the Swift bridge for a macOS-only feature. Handling it
-        // at the window keeps the whole feature on our side of the fence.
+        // Group switching and creation. Ghostty's own keybinds are defined in the Zig
+        // core and routed through its action system; adding one there would mean
+        // changing the core, the C API and the Swift bridge for a macOS-only feature.
+        // Handling it at the window keeps the whole feature on our side of the fence.
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if flags == [.command, .control] {
-            switch event.charactersIgnoringModifiers {
+            switch event.shortcutCharacters {
             case "]":
                 tabBarModel.cycleGroup(by: 1)
                 return true
@@ -340,12 +360,21 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
             // group, these do among the sections of the bar. ⌘9 is "last tab", so
             // ⌃⌘9 is the last section rather than the ninth.
             case "1", "2", "3", "4", "5", "6", "7", "8":
-                guard let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) })
+                guard let digit = event.shortcutCharacters.flatMap({ Int($0) })
                 else { break }
                 tabBarModel.selectSection(at: digit - 1)
                 return true
             case "9":
                 tabBarModel.selectLastSection()
+                return true
+            // ⌃⌘T is ⌘T one level up, like the digits: a new group, as the bar's "+"
+            // makes it.
+            case "t":
+                tabBarModel.createEmptyGroup()
+                return true
+            // ⌃⌘W closes the group on screen, as ⌘W closes the tab.
+            case "w":
+                tabBarModel.closeActiveGroup()
                 return true
             default:
                 break

@@ -40,7 +40,9 @@ struct CustomTabBarView: View {
                         sectionFrames: $sectionFrames)
                 }
 
-                NewGroupButton { model.createEmptyGroup() }
+                CustomTabAddButton(help: "New Group", size: 22) {
+                    model.createEmptyGroup()
+                }
 
                 Spacer(minLength: 0)
             }
@@ -425,6 +427,10 @@ private struct CustomTabSectionView: View {
                     model: model,
                     tabDrag: $tabDrag,
                     sectionFrames: $sectionFrames)
+            }
+
+            CustomTabAddButton(help: "New Tab", size: 24) {
+                model.newTab(in: section.group?.id)
             }
         }
         .padding(.horizontal, 5)
@@ -824,6 +830,17 @@ private struct CustomTabView: View {
 
     @State private var isHovering: Bool = false
 
+    /// Whether this tab is drawn in place. A tab that just joined starts out shrunk and
+    /// grows in, the way the strip's insertion transition shows it in a bar that was
+    /// already drawn — see `CustomTabBarModel.arrivingTabID`.
+    @State private var isInPlace: Bool
+
+    init(tab: CustomTabItem, model: CustomTabBarModel) {
+        self.tab = tab
+        self.model = model
+        _isInPlace = State(initialValue: model.arrivingTabID != tab.id)
+    }
+
     var body: some View {
         HStack(spacing: 4) {
             Text(tab.title)
@@ -871,6 +888,12 @@ private struct CustomTabView: View {
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .overlay(CustomTabContextMenuHost(subject: .tab(tab), model: model))
+        .scaleEffect(isInPlace ? 1 : 0.8, anchor: .leading)
+        .opacity(isInPlace ? 1 : 0)
+        .onAppear {
+            guard !isInPlace else { return }
+            withAnimation(.spring(response: 0.18, dampingFraction: 1)) { isInPlace = true }
+        }
     }
 
     /// The assigned tab color, if any. Uncolored tabs fall back to a neutral gray so
@@ -916,30 +939,6 @@ private struct BusyIndicator: View {
             .opacity(dim ? 0.25 : 1)
             .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true), value: dim)
             .onAppear { dim = true }
-    }
-}
-
-// MARK: - New Group
-
-private struct NewGroupButton: View {
-    let action: () -> Void
-
-    @State private var isHovering: Bool = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: "plus")
-                .font(.system(size: 10, weight: .bold))
-                .frame(width: 22, height: 22)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Color.primary.opacity(isHovering ? 0.12 : 0.04))
-                )
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .onHover { isHovering = $0 }
-        .help("New Group")
     }
 }
 
