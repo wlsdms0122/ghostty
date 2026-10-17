@@ -323,10 +323,10 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        // Group switching. Ghostty's own keybinds are defined in the Zig core and
-        // routed through its action system; adding one there would mean changing the
-        // core, the C API and the Swift bridge for a macOS-only feature. Handling it
-        // at the window keeps the whole feature on our side of the fence.
+        // Group switching and creation. Ghostty's own keybinds are defined in the Zig
+        // core and routed through its action system; adding one there would mean
+        // changing the core, the C API and the Swift bridge for a macOS-only feature.
+        // Handling it at the window keeps the whole feature on our side of the fence.
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if flags == [.command, .control] {
             switch event.charactersIgnoringModifiers {
@@ -346,6 +346,11 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
                 return true
             case "9":
                 tabBarModel.selectLastSection()
+                return true
+            // ⌃⌘T is ⌘T one level up, like the digits: a new group, as the bar's "+"
+            // makes it.
+            case "t":
+                tabBarModel.createEmptyGroup()
                 return true
             default:
                 break
