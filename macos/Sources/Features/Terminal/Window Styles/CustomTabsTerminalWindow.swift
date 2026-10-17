@@ -352,6 +352,10 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
             case "t":
                 tabBarModel.createEmptyGroup()
                 return true
+            // ⌃⌘W closes the group on screen, as ⌘W closes the tab.
+            case "w":
+                tabBarModel.closeActiveGroup()
+                return true
             default:
                 break
             }

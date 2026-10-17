@@ -498,6 +498,62 @@ class CustomTabBarModel: ObservableObject {
         refresh()
     }
 
+    /// Close the group on screen: every tab in it, then the group itself. The default
+    /// section isn't a group, so it has nothing to close.
+    func closeActiveGroup() {
+        // Same reason as `cycleGroup`: this runs from a key handler.
+        refresh()
+
+        guard let groupID = activeGroupID else { return }
+        closeGroup(groupID)
+    }
+
+    /// Close a group's tabs and then the group, asking once for the whole group the way
+    /// Close Other Tabs does. Undo brings the tabs back but not the group: a restored
+    /// tab joins whichever group is on screen.
+    func closeGroup(_ groupID: UUID) {
+        let controllers = (reference?.tabGroup?.windows ?? [])
+            .filter { ($0 as? CustomTabsTerminalWindow)?.customTabGroupID == groupID }
+            .compactMap { $0.windowController as? TerminalController }
+
+        guard !controllers.isEmpty else {
+            deleteGroup(groupID)
+            return
+        }
+
+        let needsConfirm = controllers.contains { controller in
+            controller.surfaceTree.contains(where: { $0.needsConfirmQuit })
+        }
+        guard needsConfirm else {
+            closeImmediately(controllers, group: groupID)
+            return
+        }
+
+        let window = reference?.tabGroup?.selectedWindow ?? reference
+        guard let asking = window?.windowController as? BaseTerminalController else { return }
+
+        asking.confirmClose(
+            messageText: "Close Group?",
+            informativeText: "At least one tab in this group still has a running process. If you close the group the process will be killed."
+        ) { [weak self] in
+            self?.closeImmediately(controllers, group: groupID)
+        }
+    }
+
+    private func closeImmediately(_ controllers: [TerminalController], group groupID: UUID) {
+        let undoManager = controllers.first?.undoManager
+        undoManager?.beginUndoGrouping()
+
+        for controller in controllers {
+            controller.closeTabImmediately()
+        }
+
+        undoManager?.setActionName("Close Group")
+        undoManager?.endUndoGrouping()
+
+        deleteGroup(groupID)
+    }
+
     /// Move to the next or previous group in bar order, wrapping around.
     func cycleGroup(by delta: Int) {
         // Work from the freshest snapshot: this runs from a key handler, which can fire
