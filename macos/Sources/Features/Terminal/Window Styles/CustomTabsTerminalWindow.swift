@@ -195,10 +195,25 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
         // here doesn't reassign it.
         guard child.customTabGroupID == nil else { return }
 
-        child.customTabGroupID = destination
+        tabBarModel.noteArrival(of: child)
+
+        // A tab that undo brought back returns to the group it closed from, under the
+        // title it had.
+        guard let closed = CustomTabClosedTab.returning(child.surfaces) else {
+            child.customTabGroupID = destination
+            return
+        }
+
+        child.customTabGroupID = closed.groupID.flatMap(groupRegistry.restoreGroup)
+        (child.windowController as? BaseTerminalController)?.titleOverride = closed.titleOverride
     }
 
     override func close() {
+        CustomTabClosedTab(
+            groupID: groupRegistry.group(customTabGroupID)?.id,
+            titleOverride: (windowController as? BaseTerminalController)?.titleOverride
+        ).record(for: surfaces)
+
         super.close()
 
         // After the window is really gone, so the scope it held isn't still counted as
@@ -208,6 +223,11 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
             CustomTabGroupRegistry.discardStoresWithoutWindows()
             CustomTabBarModel.discardModelsWithoutWindows()
         }
+    }
+
+    private var surfaces: [Ghostty.SurfaceView] {
+        guard let controller = windowController as? BaseTerminalController else { return [] }
+        return Array(controller.surfaceTree)
     }
 
     /// Whether a tab is being inserted into *some* tab group right now.

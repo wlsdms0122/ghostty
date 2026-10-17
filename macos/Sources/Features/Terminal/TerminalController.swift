@@ -1033,8 +1033,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     convenience init(_ ghostty: Ghostty.App, with undoState: UndoState) {
         self.init(ghostty, withSurfaceTree: undoState.surfaceTree)
 
-        // Show the window and restore its frame
-        showWindow(nil)
+        // Restore the frame, and show the window only once it's back in its tab group
         if let window {
             window.setFrame(undoState.frame, display: true)
             if let terminalWindow = window as? TerminalWindow {
@@ -1055,6 +1054,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
                 // Make it the key window
                 window.makeKeyAndOrderFront(nil)
             }
+
+            showWindow(nil)
 
             // Restore focus to the previously focused surface
             if let focusedUUID = undoState.focusedSurface,
