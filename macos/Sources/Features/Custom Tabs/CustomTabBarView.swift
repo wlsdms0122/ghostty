@@ -40,7 +40,9 @@ struct CustomTabBarView: View {
                         sectionFrames: $sectionFrames)
                 }
 
-                NewGroupButton { model.createEmptyGroup() }
+                CustomTabAddButton(help: "New Group", size: 22) {
+                    model.createEmptyGroup()
+                }
 
                 Spacer(minLength: 0)
             }
@@ -916,30 +918,6 @@ private struct BusyIndicator: View {
             .opacity(dim ? 0.25 : 1)
             .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true), value: dim)
             .onAppear { dim = true }
-    }
-}
-
-// MARK: - New Group
-
-private struct NewGroupButton: View {
-    let action: () -> Void
-
-    @State private var isHovering: Bool = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: "plus")
-                .font(.system(size: 10, weight: .bold))
-                .frame(width: 22, height: 22)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Color.primary.opacity(isHovering ? 0.12 : 0.04))
-                )
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .onHover { isHovering = $0 }
-        .help("New Group")
     }
 }
 
