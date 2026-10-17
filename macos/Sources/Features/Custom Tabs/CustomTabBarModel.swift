@@ -509,8 +509,7 @@ class CustomTabBarModel: ObservableObject {
     }
 
     /// Close a group's tabs and then the group, asking once for the whole group the way
-    /// Close Other Tabs does. Undo brings the tabs back but not the group: a restored
-    /// tab joins whichever group is on screen.
+    /// Close Other Tabs does. Undo brings the tabs back, and the group with them.
     func closeGroup(_ groupID: UUID) {
         let controllers = (reference?.tabGroup?.windows ?? [])
             .filter { ($0 as? CustomTabsTerminalWindow)?.customTabGroupID == groupID }
