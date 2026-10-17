@@ -329,7 +329,7 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
         // Handling it at the window keeps the whole feature on our side of the fence.
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if flags == [.command, .control] {
-            switch event.charactersIgnoringModifiers {
+            switch event.shortcutCharacters {
             case "]":
                 tabBarModel.cycleGroup(by: 1)
                 return true
@@ -340,7 +340,7 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
             // group, these do among the sections of the bar. ⌘9 is "last tab", so
             // ⌃⌘9 is the last section rather than the ninth.
             case "1", "2", "3", "4", "5", "6", "7", "8":
-                guard let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) })
+                guard let digit = event.shortcutCharacters.flatMap({ Int($0) })
                 else { break }
                 tabBarModel.selectSection(at: digit - 1)
                 return true
