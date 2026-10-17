@@ -474,6 +474,19 @@ class CustomTabBarModel: ObservableObject {
         selectGroup(group.id)
     }
 
+    /// Open a new tab in a group. Passing nil opens it in the default section.
+    ///
+    /// The same new tab ⌘T makes, after selecting the group: a new tab joins the group
+    /// on screen, so selecting first is what puts it here. An empty group works too,
+    /// since selecting one holds it open until a tab arrives.
+    func newTab(in groupID: UUID?) {
+        selectGroup(groupID)
+
+        let window = reference?.tabGroup?.selectedWindow ?? reference
+        guard let controller = window?.windowController as? TerminalController else { return }
+        controller.newTab(nil)
+    }
+
     /// Delete a group. Its tabs fall back to the default section rather than closing —
     /// removing a label shouldn't destroy terminals.
     func deleteGroup(_ groupID: UUID) {

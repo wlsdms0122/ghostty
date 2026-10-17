@@ -428,6 +428,10 @@ private struct CustomTabSectionView: View {
                     tabDrag: $tabDrag,
                     sectionFrames: $sectionFrames)
             }
+
+            CustomTabAddButton(help: "New Tab", size: 24) {
+                model.newTab(in: section.group?.id)
+            }
         }
         .padding(.horizontal, 5)
         .padding(.vertical, 3)
