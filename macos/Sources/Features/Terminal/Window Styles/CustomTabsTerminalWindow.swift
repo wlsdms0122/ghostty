@@ -195,6 +195,8 @@ class CustomTabsTerminalWindow: TransparentTitlebarTerminalWindow {
         // here doesn't reassign it.
         guard child.customTabGroupID == nil else { return }
 
+        tabBarModel.noteArrival(of: child)
+
         // A tab that undo brought back returns to the group it closed from, under the
         // title it had.
         guard let closed = CustomTabClosedTab.returning(child.surfaces) else {

@@ -368,6 +368,25 @@ class CustomTabBarModel: ObservableObject {
         }
     }
 
+    /// A tab that just joined, for as long as it takes to grow in.
+    ///
+    /// The bar that shows a new tab is usually new itself: every tab builds its own bar,
+    /// and the one in front after ⌘T or an undo is the new tab's. A bar that has never
+    /// drawn has no earlier frame to animate from, so the strip's insertion transition
+    /// can't run there and the tab would appear at full size. The tab grows in on its
+    /// own instead, and this says which one. Cleared afterwards, so a bar built later —
+    /// switching tabs builds one — shows the tab already in place.
+    private(set) var arrivingTabID: ObjectIdentifier?
+
+    func noteArrival(of window: NSWindow) {
+        let id = ObjectIdentifier(window)
+        arrivingTabID = id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, self.arrivingTabID == id else { return }
+            self.arrivingTabID = nil
+        }
+    }
+
     // MARK: Actions
 
     /// Select a tab. This is the same call the native tab bar makes, so everything

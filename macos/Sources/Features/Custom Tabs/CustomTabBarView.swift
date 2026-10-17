@@ -830,6 +830,17 @@ private struct CustomTabView: View {
 
     @State private var isHovering: Bool = false
 
+    /// Whether this tab is drawn in place. A tab that just joined starts out shrunk and
+    /// grows in, the way the strip's insertion transition shows it in a bar that was
+    /// already drawn — see `CustomTabBarModel.arrivingTabID`.
+    @State private var isInPlace: Bool
+
+    init(tab: CustomTabItem, model: CustomTabBarModel) {
+        self.tab = tab
+        self.model = model
+        _isInPlace = State(initialValue: model.arrivingTabID != tab.id)
+    }
+
     var body: some View {
         HStack(spacing: 4) {
             Text(tab.title)
@@ -877,6 +888,12 @@ private struct CustomTabView: View {
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .overlay(CustomTabContextMenuHost(subject: .tab(tab), model: model))
+        .scaleEffect(isInPlace ? 1 : 0.8, anchor: .leading)
+        .opacity(isInPlace ? 1 : 0)
+        .onAppear {
+            guard !isInPlace else { return }
+            withAnimation(.spring(response: 0.18, dampingFraction: 1)) { isInPlace = true }
+        }
     }
 
     /// The assigned tab color, if any. Uncolored tabs fall back to a neutral gray so
