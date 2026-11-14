@@ -1,6 +1,6 @@
 .{
     .name = .ghostty,
-    .version = "1.3.2-jsilver.4",
+    .version = "1.4.1-jsilver.5",
     .paths = .{""},
     .fingerprint = 0x64407a2a0b4147e5,
     // Keep in sync with snap/snapcraft.yaml and flatpak/dependencies.yml
