@@ -363,6 +363,10 @@ pub const Action = union(Key) {
     /// and apprts may ignore it, for example if the surface is in a
     /// split or the window is fullscreen.
     resize_window: ResizeWindow,
+
+    /// Set the application window theme for this session.
+    set_window_theme: WindowTheme,
+
     /// The shell started running a command, and is no longer at its prompt.
     /// Shell integration only — without it this is never sent, so a surface
     /// simply never reports as working.
@@ -450,6 +454,7 @@ pub const Action = union(Key) {
         copy_title_to_clipboard,
         move_tab_to_new_window,
         resize_window,
+        set_window_theme,
         command_started,
         command_ended,
 
@@ -460,21 +465,21 @@ pub const Action = union(Key) {
 
     /// Sync with: ghostty_action_u
     pub const CValue = cvalue: {
-        const key_fields = @typeInfo(Key).@"enum".fields;
+        const key_fields = @typeInfo(Key).@"enum".field_names;
         var names: [key_fields.len][]const u8 = undefined;
         var types: [key_fields.len]type = undefined;
-        var attrs: [key_fields.len]std.builtin.Type.UnionField.Attributes = undefined;
+        var attrs: [key_fields.len]std.lang.Type.Union.FieldAttributes = undefined;
 
         for (key_fields, &names, &types, &attrs) |field, *name, *ty, *attr| {
-            const action = @unionInit(Action, field.name, undefined);
+            const action = @unionInit(Action, field, undefined);
             const Type = t: {
-                const Type = @TypeOf(@field(action, field.name));
+                const Type = @TypeOf(@field(action, field));
                 // Types can provide custom types for their CValue.
                 if (Type != void and @hasDecl(Type, "C")) break :t Type.C;
                 break :t Type;
             };
 
-            name.* = field.name;
+            name.* = field;
             ty.* = Type;
             attr.* = .{ .@"align" = @alignOf(Type) };
         }
@@ -501,9 +506,9 @@ pub const Action = union(Key) {
 
     /// Returns the value type for the given key.
     pub fn Value(comptime key: Key) type {
-        inline for (@typeInfo(Action).@"union".fields) |field| {
-            const field_key = @field(Key, field.name);
-            if (field_key == key) return field.type;
+        inline for (@typeInfo(Action).@"union".field_names, @typeInfo(Action).@"union".field_types) |field_name, field_type| {
+            const field_key = @field(Key, field_name);
+            if (field_key == key) return field_type;
         }
 
         unreachable;
@@ -634,6 +639,17 @@ pub const SecureInput = enum(c_int) {
 
     test "ghostty.h SecureInput" {
         try lib.checkGhosttyHEnum(SecureInput, "GHOSTTY_SECURE_INPUT_");
+    }
+};
+
+pub const WindowTheme = enum(c_int) {
+    config,
+    system,
+    light,
+    dark,
+
+    test "ghostty.h WindowTheme" {
+        try lib.checkGhosttyHEnum(WindowTheme, "GHOSTTY_ACTION_WINDOW_THEME_");
     }
 };
 
