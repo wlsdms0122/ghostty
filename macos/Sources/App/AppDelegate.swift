@@ -102,6 +102,8 @@ class AppDelegate: NSObject,
     /// This is only true before application has become active.
     private var applicationHasBecomeActive: Bool = false
 
+    private let restorationBackup = TerminalRestorationBackup()
+
     /// This is set in applicationDidFinishLaunching with the system uptime so we can determine the
     /// seconds since the process was launched.
     private var applicationLaunchTime: TimeInterval = 0
@@ -385,6 +387,8 @@ class AppDelegate: NSObject,
         // First launch stuff
         if !applicationHasBecomeActive {
             applicationHasBecomeActive = true
+
+            restorationBackup.start()
 
             // Let's launch our first window. We only do this if we have no other windows. It
             // is possible to have other windows in a few scenarios:
